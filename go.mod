@@ -19,6 +19,7 @@ require (
 	github.com/consensys/gnark-crypto v0.12.0
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c
 	github.com/dchest/siphash v1.2.1
+	github.com/dragmz/teal v0.0.0-20231021094949-9a2e166c4c82
 	github.com/fatih/color v1.13.0
 	github.com/getkin/kin-openapi v0.107.0
 	github.com/gofrs/flock v0.7.0
@@ -37,6 +38,7 @@ require (
 	github.com/multiformats/go-multiaddr v0.10.1
 	github.com/multiformats/go-multiaddr-dns v0.3.1
 	github.com/olivere/elastic v6.2.14+incompatible
+	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.5.0
 	github.com/stretchr/testify v1.8.4
@@ -50,6 +52,7 @@ require (
 )
 
 require (
+	github.com/algorand/go-algorand-sdk/v2 v2.3.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -92,6 +95,7 @@ require (
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jmespath/go-jmespath v0.3.0 // indirect
+	github.com/joe-p/tealfmt v0.0.0-20221219211223-cec2ea891d52 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.5 // indirect
@@ -130,7 +134,6 @@ require (
 	github.com/opencontainers/runtime-spec v1.0.2 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.14.0 // indirect
 	github.com/prometheus/client_model v0.4.0 // indirect
