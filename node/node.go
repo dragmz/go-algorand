@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -43,6 +43,7 @@ import (
 	"github.com/algorand/go-algorand/data/pools"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/data/transactions/verify"
+	"github.com/algorand/go-algorand/heartbeat"
 	"github.com/algorand/go-algorand/ledger"
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/ledger/simulation"
@@ -94,9 +95,9 @@ type StatusReport struct {
 	CatchpointCatchupAcquiredBlocks    uint64
 	UpgradePropose                     protocol.ConsensusVersion
 	UpgradeApprove                     bool
-	UpgradeDelay                       uint64
+	UpgradeDelay                       basics.Round
 	NextProtocolVoteBefore             basics.Round
-	NextProtocolApprovals              uint64
+	NextProtocolApprovals              basics.Round
 }
 
 // TimeSinceLastRound returns the time since the last block was approved (locally), or 0 if no blocks seen
@@ -155,6 +156,8 @@ type AlgorandFullNode struct {
 
 	stateProofWorker *stateproof.Worker
 	partHandles      []db.Accessor
+
+	heartbeatService *heartbeat.Service
 }
 
 // TxnWithStatus represents information about a single transaction,
@@ -259,8 +262,6 @@ func MakeFull(log logging.Logger, rootDir string, cfg config.Local, phonebookAdd
 		ExecutionPool: node.lowPriorityCryptoVerificationPool,
 		Ledger:        node.ledger,
 		Net:           node.net,
-		GenesisID:     node.genesisID,
-		GenesisHash:   node.genesisHash,
 		Config:        cfg,
 	}
 	node.txHandler, err = data.MakeTxHandler(txHandlerOpts)
@@ -338,6 +339,8 @@ func MakeFull(log logging.Logger, rootDir string, cfg config.Local, phonebookAdd
 
 	node.stateProofWorker = stateproof.NewWorker(node.genesisDirs.StateproofGenesisDir, node.log, node.accountManager, node.ledger.Ledger, node.net, node)
 
+	node.heartbeatService = heartbeat.NewService(node.accountManager, node.ledger, node, node.log)
+
 	return node, err
 }
 
@@ -380,6 +383,7 @@ func (node *AlgorandFullNode) Start() error {
 		node.ledgerService.Start()
 		node.txHandler.Start()
 		node.stateProofWorker.Start()
+		node.heartbeatService.Start()
 		err := startNetwork()
 		if err != nil {
 			return err
@@ -459,6 +463,7 @@ func (node *AlgorandFullNode) Stop() {
 	if node.catchpointCatchupService != nil {
 		node.catchpointCatchupService.Stop()
 	} else {
+		node.heartbeatService.Stop()
 		node.stateProofWorker.Stop()
 		node.txHandler.Stop()
 		node.agreementService.Shutdown()
@@ -518,6 +523,10 @@ func (node *AlgorandFullNode) writeDevmodeBlock() (err error) {
 		blk.TimeStamp = prev.TimeStamp + *node.timestampOffset
 	}
 	blk.BlockHeader.Seed = committee.Seed(prev.Hash())
+	// Zero out payouts if Proposer not set
+	if (blk.BlockHeader.Proposer == basics.Address{}) {
+		blk.BlockHeader.ProposerPayout = basics.MicroAlgos{}
+	}
 	vb2 := ledgercore.MakeValidatedBlock(blk, vb.UnfinishedDeltas())
 
 	// add the newly generated block to the ledger
@@ -779,7 +788,7 @@ func latestBlockStatus(ledger *data.Ledger, catchupService *catchup.Service) (s 
 
 	s.UpgradePropose = b.UpgradeVote.UpgradePropose
 	s.UpgradeApprove = b.UpgradeApprove
-	s.UpgradeDelay = uint64(b.UpgradeVote.UpgradeDelay)
+	s.UpgradeDelay = b.UpgradeVote.UpgradeDelay
 	s.NextProtocolVoteBefore = b.NextProtocolVoteBefore
 	s.NextProtocolApprovals = b.UpgradeState.NextProtocolApprovals
 
@@ -1220,6 +1229,7 @@ func (node *AlgorandFullNode) SetCatchpointCatchupMode(catchpointCatchupMode boo
 			}()
 			node.net.ClearHandlers()
 			node.net.ClearValidatorHandlers()
+			node.heartbeatService.Stop()
 			node.stateProofWorker.Stop()
 			node.txHandler.Stop()
 			node.agreementService.Shutdown()
@@ -1248,6 +1258,7 @@ func (node *AlgorandFullNode) SetCatchpointCatchupMode(catchpointCatchupMode boo
 		node.ledgerService.Start()
 		node.txHandler.Start()
 		node.stateProofWorker.Start()
+		node.heartbeatService.Start()
 
 		// Set up a context we can use to cancel goroutines on Stop()
 		node.ctx, node.cancelCtx = context.WithCancel(context.Background())
@@ -1437,12 +1448,12 @@ func (node *AlgorandFullNode) IsParticipating() bool {
 }
 
 // SetSyncRound no-ops
-func (node *AlgorandFullNode) SetSyncRound(_ uint64) error {
+func (node *AlgorandFullNode) SetSyncRound(_ basics.Round) error {
 	return nil
 }
 
 // GetSyncRound returns 0 (not set) in the base node implementation
-func (node *AlgorandFullNode) GetSyncRound() uint64 {
+func (node *AlgorandFullNode) GetSyncRound() basics.Round {
 	return 0
 }
 

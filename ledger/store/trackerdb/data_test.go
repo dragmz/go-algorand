@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -1152,7 +1152,7 @@ func TestBaseOnlineAccountDataIsEmpty(t *testing.T) {
 	structureTesting := func(t *testing.T) {
 		encoding, err := json.Marshal(&empty)
 		zeros32 := "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
-		expectedEncoding := `{"VoteID":[` + zeros32 + `],"SelectionID":[` + zeros32 + `],"VoteFirstValid":0,"VoteLastValid":0,"VoteKeyDilution":0,"StateProofID":[` + zeros32 + `,` + zeros32 + `],"IncentiveEligible":false,"MicroAlgos":{"Raw":0},"RewardsBase":0}`
+		expectedEncoding := `{"VoteID":[` + zeros32 + `],"SelectionID":[` + zeros32 + `],"VoteFirstValid":0,"VoteLastValid":0,"VoteKeyDilution":0,"StateProofID":[` + zeros32 + `,` + zeros32 + `],"LastProposed":0,"LastHeartbeat":0,"IncentiveEligible":false,"MicroAlgos":{"Raw":0},"RewardsBase":0}`
 		require.NoError(t, err)
 		require.Equal(t, expectedEncoding, string(encoding))
 	}
@@ -1190,8 +1190,8 @@ func TestBaseOnlineAccountDataGettersSetters(t *testing.T) {
 	require.Equal(t, data.VoteKeyDilution, ba.VoteKeyDilution)
 	require.Equal(t, data.StateProofID, ba.StateProofID)
 
-	normBalance := basics.NormalizedOnlineAccountBalance(basics.Online, data.RewardsBase, data.MicroAlgos, proto)
-	require.Equal(t, normBalance, ba.NormalizedOnlineBalance(proto))
+	normBalance := basics.NormalizedOnlineAccountBalance(basics.Online, data.RewardsBase, data.MicroAlgos, proto.RewardUnit)
+	require.Equal(t, normBalance, ba.NormalizedOnlineBalance(proto.RewardUnit))
 	oa := ba.GetOnlineAccount(addr, normBalance)
 
 	require.Equal(t, addr, oa.Address)
@@ -1204,9 +1204,9 @@ func TestBaseOnlineAccountDataGettersSetters(t *testing.T) {
 
 	rewardsLevel := uint64(1)
 	microAlgos, _, _ := basics.WithUpdatedRewards(
-		proto, basics.Online, oa.MicroAlgos, basics.MicroAlgos{}, ba.RewardsBase, rewardsLevel,
+		proto.RewardUnit, basics.Online, oa.MicroAlgos, basics.MicroAlgos{}, ba.RewardsBase, rewardsLevel,
 	)
-	oad := ba.GetOnlineAccountData(proto, rewardsLevel)
+	oad := ba.GetOnlineAccountData(proto.RewardUnit, rewardsLevel)
 
 	require.Equal(t, microAlgos, oad.MicroAlgosWithRewards)
 	require.Equal(t, ba.VoteID, oad.VoteID)
@@ -1249,7 +1249,7 @@ func TestBaseOnlineAccountDataReflect(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 
-	require.Equal(t, 5, reflect.TypeOf(BaseOnlineAccountData{}).NumField(), "update all getters and setters for baseOnlineAccountData and change the field count")
+	require.Equal(t, 7, reflect.TypeOf(BaseOnlineAccountData{}).NumField(), "update all getters and setters for baseOnlineAccountData and change the field count")
 }
 
 func TestBaseVotingDataReflect(t *testing.T) {

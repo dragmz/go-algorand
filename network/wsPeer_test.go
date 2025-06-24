@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -166,6 +166,8 @@ func TestVersionToFeature(t *testing.T) {
 		{"2.2", PeerFeatureProposalCompression, pfCompressedProposal},
 		{"2.2", strings.Join([]string{PeerFeatureProposalCompression, "test"}, ","), pfCompressedProposal},
 		{"2.2", strings.Join([]string{PeerFeatureProposalCompression, "test"}, ", "), pfCompressedProposal},
+		{"2.2", strings.Join([]string{PeerFeatureProposalCompression, PeerFeatureVoteVpackCompression}, ","), pfCompressedVoteVpack | pfCompressedProposal},
+		{"2.2", PeerFeatureVoteVpackCompression, pfCompressedVoteVpack},
 		{"2.3", PeerFeatureProposalCompression, pfCompressedProposal},
 	}
 	for i, test := range tests {

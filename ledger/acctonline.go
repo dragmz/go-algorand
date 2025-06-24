@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -355,13 +355,6 @@ func (ao *onlineAccounts) consecutiveVersion(offset uint64) uint64 {
 	return offset
 }
 
-func (ao *onlineAccounts) handleUnorderedCommit(dcc *deferredCommitContext) {
-}
-func (ao *onlineAccounts) handlePrepareCommitError(dcc *deferredCommitContext) {
-}
-func (ao *onlineAccounts) handleCommitError(dcc *deferredCommitContext) {
-}
-
 func (ao *onlineAccounts) maxBalLookback() uint64 {
 	lastProtoVersion := ao.onlineRoundParamsData[len(ao.onlineRoundParamsData)-1].CurrentProtocol
 	return config.Consensus[lastProtoVersion].MaxBalLookback
@@ -535,9 +528,6 @@ func (ao *onlineAccounts) postCommit(ctx context.Context, dcc *deferredCommitCon
 	ao.voters.postCommit(dcc)
 }
 
-func (ao *onlineAccounts) postCommitUnlocked(ctx context.Context, dcc *deferredCommitContext) {
-}
-
 // onlineCirculation return the total online balance for the given round, for use by agreement.
 func (ao *onlineAccounts) onlineCirculation(rnd basics.Round, voteRnd basics.Round) (basics.MicroAlgos, error) {
 	// Get cached total stake for rnd
@@ -620,11 +610,6 @@ func (ao *onlineAccounts) onlineTotals(rnd basics.Round) (basics.MicroAlgos, pro
 
 	onlineRoundParams := ao.onlineRoundParamsData[offset]
 	return basics.MicroAlgos{Raw: onlineRoundParams.OnlineSupply}, onlineRoundParams.CurrentProtocol, nil
-}
-
-// LookupOnlineAccountData returns the online account data for a given address at a given round.
-func (ao *onlineAccounts) LookupOnlineAccountData(rnd basics.Round, addr basics.Address) (data basics.OnlineAccountData, err error) {
-	return ao.lookupOnlineAccountData(rnd, addr)
 }
 
 // roundOffset calculates the offset of the given round compared to the current dbRound. Requires that the lock would be taken.
@@ -716,7 +701,7 @@ func (ao *onlineAccounts) lookupOnlineAccountData(rnd basics.Round, addr basics.
 				// Check if this is the most recent round, in which case, we can
 				// use a cache of the most recent account state.
 				if offset == uint64(len(ao.deltas)) {
-					return macct.data.OnlineAccountData(rewardsProto, rewardsLevel), nil
+					return macct.data.OnlineAccountData(rewardsProto.RewardUnit, rewardsLevel), nil
 				}
 				// the account appears in the deltas, but we don't know if it appears in the
 				// delta range of [0..offset], so we'll need to check :
@@ -727,14 +712,14 @@ func (ao *onlineAccounts) lookupOnlineAccountData(rnd basics.Round, addr basics.
 					offset--
 					d, ok := ao.deltas[offset].GetData(addr)
 					if ok {
-						return d.OnlineAccountData(rewardsProto, rewardsLevel), nil
+						return d.OnlineAccountData(rewardsProto.RewardUnit, rewardsLevel), nil
 					}
 				}
 			}
 		}
 
 		if macct, has := ao.onlineAccountsCache.read(addr, rnd); has {
-			return macct.GetOnlineAccountData(rewardsProto, rewardsLevel), nil
+			return macct.GetOnlineAccountData(rewardsProto.RewardUnit, rewardsLevel), nil
 		}
 
 		ao.accountsMu.RUnlock()
@@ -795,7 +780,7 @@ func (ao *onlineAccounts) lookupOnlineAccountData(rnd basics.Round, addr basics.
 				ao.log.Info("inserted new item to onlineAccountsCache")
 			}
 			ao.accountsMu.Unlock()
-			return persistedData.AccountData.GetOnlineAccountData(rewardsProto, rewardsLevel), nil
+			return persistedData.AccountData.GetOnlineAccountData(rewardsProto.RewardUnit, rewardsLevel), nil
 		}
 		// case 3.3: retry (for loop iterates and queries again)
 		ao.accountsMu.Unlock()
@@ -887,7 +872,7 @@ func (ao *onlineAccounts) TopOnlineAccounts(rnd basics.Round, voteRnd basics.Rou
 					return err
 				}
 
-				accts, err = ar.AccountsOnlineTop(rnd, batchOffset, batchSize, genesisProto)
+				accts, err = ar.AccountsOnlineTop(rnd, batchOffset, batchSize, genesisProto.RewardUnit)
 				if err != nil {
 					return
 				}
@@ -990,7 +975,7 @@ func (ao *onlineAccounts) TopOnlineAccounts(rnd basics.Round, voteRnd basics.Rou
 				return nil, basics.MicroAlgos{}, fmt.Errorf("TopOnlineAccounts: overflow in stakeOfflineInVoteRound")
 			}
 			if params.StateProofExcludeTotalWeightWithRewards {
-				rewards := basics.PendingRewards(&ot, *params, oa.MicroAlgos, oa.RewardsBase, rewardsLevel)
+				rewards := basics.PendingRewards(&ot, params.RewardUnit, oa.MicroAlgos, oa.RewardsBase, rewardsLevel)
 				totalOnlineStake = ot.SubA(totalOnlineStake, rewards)
 				if ot.Overflowed {
 					return nil, basics.MicroAlgos{}, fmt.Errorf("TopOnlineAccounts: overflow in stakeOfflineInVoteRound rewards")
@@ -1044,7 +1029,7 @@ func (ao *onlineAccounts) onlineAcctsExpiredByRound(rnd, voteRnd basics.Round) (
 			if err != nil {
 				return err
 			}
-			expiredAccounts, err = ar.ExpiredOnlineAccountsForRound(rnd, voteRnd, rewardsParams, rewardsLevel)
+			expiredAccounts, err = ar.ExpiredOnlineAccountsForRound(rnd, voteRnd, rewardsParams.RewardUnit, rewardsLevel)
 			if err != nil {
 				return err
 			}
@@ -1080,7 +1065,7 @@ func (ao *onlineAccounts) onlineAcctsExpiredByRound(rnd, voteRnd basics.Round) (
 				// setting VoteFirstValid into future.
 				if d.Status == basics.Online && d.VoteLastValid != 0 && voteRnd > d.VoteLastValid {
 					// Online expired: insert or overwrite the old data in expiredAccounts.
-					oadata := d.OnlineAccountData(rewardsParams, rewardsLevel)
+					oadata := d.OnlineAccountData(rewardsParams.RewardUnit, rewardsLevel)
 					expiredAccounts[addr] = &oadata
 				} else {
 					// addr went offline not expired, so do not report as an expired ONLINE account.

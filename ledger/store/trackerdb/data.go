@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -19,7 +19,6 @@ package trackerdb
 import (
 	"context"
 
-	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/crypto/merklesignature"
 	"github.com/algorand/go-algorand/data/basics"
@@ -112,8 +111,8 @@ type ResourcesData struct {
 	KeyValue           basics.TealKeyValue `codec:"p"`
 
 	// application global params ( basics.AppParams )
-	ApprovalProgram               []byte              `codec:"q,allocbound=config.MaxAvailableAppProgramLen"`
-	ClearStateProgram             []byte              `codec:"r,allocbound=config.MaxAvailableAppProgramLen"`
+	ApprovalProgram               []byte              `codec:"q,allocbound=bounds.MaxAvailableAppProgramLen"`
+	ClearStateProgram             []byte              `codec:"r,allocbound=bounds.MaxAvailableAppProgramLen"`
 	GlobalState                   basics.TealKeyValue `codec:"s"`
 	LocalStateSchemaNumUint       uint64              `codec:"t"`
 	LocalStateSchemaNumByteSlice  uint64              `codec:"u"`
@@ -132,6 +131,8 @@ type ResourcesData struct {
 	// consensus parameter is being set. Once the above consensus takes place, this field would be populated with the
 	// correct round number.
 	UpdateRound uint64 `codec:"z"`
+
+	Version uint64 `codec:"A"`
 }
 
 // BaseVotingData is the base struct used to store voting data
@@ -152,6 +153,8 @@ type BaseOnlineAccountData struct {
 
 	BaseVotingData
 
+	LastProposed      basics.Round      `codec:"V"`
+	LastHeartbeat     basics.Round      `codec:"W"`
 	IncentiveEligible bool              `codec:"X"`
 	MicroAlgos        basics.MicroAlgos `codec:"Y"`
 	RewardsBase       uint64            `codec:"Z"`
@@ -278,8 +281,8 @@ func (prd *PersistedResourcesData) AccountResource() ledgercore.AccountResource 
 }
 
 // NormalizedOnlineBalance getter for normalized online balance.
-func (ba *BaseAccountData) NormalizedOnlineBalance(proto config.ConsensusParams) uint64 {
-	return basics.NormalizedOnlineAccountBalance(ba.Status, ba.RewardsBase, ba.MicroAlgos, proto)
+func (ba *BaseAccountData) NormalizedOnlineBalance(rewardUnit uint64) uint64 {
+	return basics.NormalizedOnlineAccountBalance(ba.Status, ba.RewardsBase, ba.MicroAlgos, rewardUnit)
 }
 
 // SetCoreAccountData setter for core account data.
@@ -456,7 +459,10 @@ func (bo *BaseOnlineAccountData) IsVotingEmpty() bool {
 func (bo *BaseOnlineAccountData) IsEmpty() bool {
 	return bo.IsVotingEmpty() &&
 		bo.MicroAlgos.Raw == 0 &&
-		bo.RewardsBase == 0 && !bo.IncentiveEligible
+		bo.RewardsBase == 0 &&
+		bo.LastHeartbeat == 0 &&
+		bo.LastProposed == 0 &&
+		!bo.IncentiveEligible
 }
 
 // GetOnlineAccount returns ledgercore.OnlineAccount for top online accounts / voters
@@ -475,9 +481,9 @@ func (bo *BaseOnlineAccountData) GetOnlineAccount(addr basics.Address, normBalan
 
 // GetOnlineAccountData returns basics.OnlineAccountData for lookup agreement
 // TODO: unify with GetOnlineAccount/ledgercore.OnlineAccount
-func (bo *BaseOnlineAccountData) GetOnlineAccountData(proto config.ConsensusParams, rewardsLevel uint64) basics.OnlineAccountData {
+func (bo *BaseOnlineAccountData) GetOnlineAccountData(rewardUnit uint64, rewardsLevel uint64) basics.OnlineAccountData {
 	microAlgos, _, _ := basics.WithUpdatedRewards(
-		proto, basics.Online, bo.MicroAlgos, basics.MicroAlgos{}, bo.RewardsBase, rewardsLevel,
+		rewardUnit, basics.Online, bo.MicroAlgos, basics.MicroAlgos{}, bo.RewardsBase, rewardsLevel,
 	)
 
 	return basics.OnlineAccountData{
@@ -491,12 +497,14 @@ func (bo *BaseOnlineAccountData) GetOnlineAccountData(proto config.ConsensusPara
 			VoteKeyDilution: bo.VoteKeyDilution,
 		},
 		IncentiveEligible: bo.IncentiveEligible,
+		LastProposed:      bo.LastProposed,
+		LastHeartbeat:     bo.LastHeartbeat,
 	}
 }
 
 // NormalizedOnlineBalance getter for normalized online balance.
-func (bo *BaseOnlineAccountData) NormalizedOnlineBalance(proto config.ConsensusParams) uint64 {
-	return basics.NormalizedOnlineAccountBalance(basics.Online, bo.RewardsBase, bo.MicroAlgos, proto)
+func (bo *BaseOnlineAccountData) NormalizedOnlineBalance(rewardUnit uint64) uint64 {
+	return basics.NormalizedOnlineAccountBalance(basics.Online, bo.RewardsBase, bo.MicroAlgos, rewardUnit)
 }
 
 // SetCoreAccountData setter for core account data.
@@ -507,6 +515,8 @@ func (bo *BaseOnlineAccountData) SetCoreAccountData(ad *ledgercore.AccountData) 
 	bo.MicroAlgos = ad.MicroAlgos
 	bo.RewardsBase = ad.RewardsBase
 	bo.IncentiveEligible = ad.IncentiveEligible
+	bo.LastProposed = ad.LastProposed
+	bo.LastHeartbeat = ad.LastHeartbeat
 }
 
 // MakeResourcesData returns a new empty instance of resourcesData.
@@ -543,7 +553,8 @@ func (rd *ResourcesData) IsEmptyAppFields() bool {
 		rd.LocalStateSchemaNumByteSlice == 0 &&
 		rd.GlobalStateSchemaNumUint == 0 &&
 		rd.GlobalStateSchemaNumByteSlice == 0 &&
-		rd.ExtraProgramPages == 0
+		rd.ExtraProgramPages == 0 &&
+		rd.Version == 0
 }
 
 // IsApp returns true if the flag is ResourceFlagsEmptyApp and the fields are not empty.
@@ -721,6 +732,7 @@ func (rd *ResourcesData) ClearAppParams() {
 	rd.GlobalStateSchemaNumUint = 0
 	rd.GlobalStateSchemaNumByteSlice = 0
 	rd.ExtraProgramPages = 0
+	rd.Version = 0
 	hadHolding := (rd.ResourceFlags & ResourceFlagsNotHolding) == ResourceFlagsHolding
 	rd.ResourceFlags -= rd.ResourceFlags & ResourceFlagsOwnership
 	rd.ResourceFlags &= ^ResourceFlagsEmptyApp
@@ -739,6 +751,7 @@ func (rd *ResourcesData) SetAppParams(ap basics.AppParams, haveHoldings bool) {
 	rd.GlobalStateSchemaNumUint = ap.GlobalStateSchema.NumUint
 	rd.GlobalStateSchemaNumByteSlice = ap.GlobalStateSchema.NumByteSlice
 	rd.ExtraProgramPages = ap.ExtraProgramPages
+	rd.Version = ap.Version
 	rd.ResourceFlags |= ResourceFlagsOwnership
 	if !haveHoldings {
 		rd.ResourceFlags |= ResourceFlagsNotHolding
@@ -766,6 +779,7 @@ func (rd *ResourcesData) GetAppParams() basics.AppParams {
 			},
 		},
 		ExtraProgramPages: rd.ExtraProgramPages,
+		Version:           rd.Version,
 	}
 }
 

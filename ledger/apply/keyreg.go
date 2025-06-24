@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/algorand/go-algorand/agreement"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/transactions"
 )
@@ -29,10 +30,6 @@ var errKeyregGoingOnlineFirstVotingInFuture = errors.New("transaction tries to m
 
 // Keyreg applies a KeyRegistration transaction using the Balances interface.
 func Keyreg(keyreg transactions.KeyregTxnFields, header transactions.Header, balances Balances, spec transactions.SpecialAddresses, ad *transactions.ApplyData, round basics.Round) error {
-	if header.Sender == spec.FeeSink {
-		return fmt.Errorf("cannot register participation key for fee sink's address %v", header.Sender)
-	}
-
 	// Get the user's balance entry
 	record, err := balances.Get(header.Sender, false)
 	if err != nil {
@@ -79,7 +76,8 @@ func Keyreg(keyreg transactions.KeyregTxnFields, header transactions.Header, bal
 		}
 		record.Status = basics.Online
 		if params.Payouts.Enabled {
-			record.LastHeartbeat = header.FirstValid
+			lookback := agreement.BalanceLookback(balances.ConsensusParams())
+			record.LastHeartbeat = round + lookback
 		}
 		record.VoteFirstValid = keyreg.VoteFirst
 		record.VoteLastValid = keyreg.VoteLast

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -129,7 +129,11 @@ func (s *Server) Initialize(cfg config.Local, phonebookAddresses []string, genes
 		return errors.New(
 			"Initialize() overflowed when adding up ReservedFDs and RestConnectionsHardLimit; decrease them")
 	}
-	err = util.SetFdSoftLimit(fdRequired)
+	if cfg.EnableP2P {
+		// TODO: Decide if this is too much, or not enough.
+		fdRequired = ot.Add(fdRequired, 512)
+	}
+	err = util.RaiseFdSoftLimit(fdRequired)
 	if err != nil {
 		return fmt.Errorf("Initialize() err: %w", err)
 	}
@@ -141,7 +145,7 @@ func (s *Server) Initialize(cfg config.Local, phonebookAddresses []string, genes
 			return errors.New(
 				"Initialize() overflowed when adding up fdRequired and 1000 needed for pebbledb")
 		}
-		err = util.SetFdSoftLimit(fdRequired)
+		err = util.RaiseFdSoftLimit(fdRequired)
 		if err != nil {
 			return fmt.Errorf("Initialize() failed to set FD limit for pebbledb backend, err: %w", err)
 		}
@@ -190,7 +194,7 @@ func (s *Server) Initialize(cfg config.Local, phonebookAddresses []string, genes
 					}
 				}
 			}
-			fdErr = util.SetFdSoftLimit(maxFDs)
+			fdErr = util.RaiseFdSoftLimit(maxFDs)
 			if fdErr != nil {
 				// do not fail but log the error
 				s.log.Errorf("Failed to set a new RLIMIT_NOFILE value to %d (max %d): %s", fdRequired, hard, fdErr.Error())
@@ -290,7 +294,7 @@ func makeListener(addr string) (net.Listener, error) {
 		preferredAddr := strings.Replace(addr, ":0", ":8080", -1)
 		listener, err = net.Listen("tcp", preferredAddr)
 		if err == nil {
-			return listener, err
+			return listener, nil
 		}
 	}
 	// err was not nil or :0 was not provided, fall back to originally passed addr
@@ -335,9 +339,9 @@ func (s *Server) Start() {
 	}
 
 	if cfg.EnableMetricReporting {
-		if err := s.metricCollector.Start(context.Background()); err != nil {
+		if err1 := s.metricCollector.Start(context.Background()); err1 != nil {
 			// log this error
-			s.log.Infof("Unable to start metric collection service : %v", err)
+			s.log.Infof("Unable to start metric collection service : %v", err1)
 		}
 		s.metricServiceStarted = true
 	}

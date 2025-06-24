@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -176,7 +176,7 @@ func (g *benchAppOptInsTxnGenerator) Prepare(tb testing.TB, addrs []basics.Addre
 					GenesisHash: gh,
 				},
 				ApplicationCallTxnFields: transactions.ApplicationCallTxnFields{
-					ApplicationID: basics.AppIndex(appIdx),
+					ApplicationID: appIdx,
 					OnCompletion:  transactions.OptInOC,
 				},
 			}

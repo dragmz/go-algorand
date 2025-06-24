@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -231,7 +231,7 @@ func (w ioPropWrapper) containsTrace(trace ioTrace) (contains bool, info string,
 	for _, e := range trace.events {
 		valid := checker.addEvent(e)
 		if valid != nil {
-			return false, valid.Error(), nil
+			return false, valid.Error(), nil //nolint:nilerr // intentional
 		}
 	}
 	return true, "", nil

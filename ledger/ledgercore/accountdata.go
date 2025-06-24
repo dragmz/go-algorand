@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -113,9 +113,9 @@ func AssignAccountData(a *basics.AccountData, acct AccountData) {
 }
 
 // WithUpdatedRewards calls basics account data WithUpdatedRewards
-func (u AccountData) WithUpdatedRewards(proto config.ConsensusParams, rewardsLevel uint64) AccountData {
+func (u AccountData) WithUpdatedRewards(rewardUnit uint64, rewardsLevel uint64) AccountData {
 	u.MicroAlgos, u.RewardedMicroAlgos, u.RewardsBase = basics.WithUpdatedRewards(
-		proto, u.Status, u.MicroAlgos, u.RewardedMicroAlgos, u.RewardsBase, rewardsLevel,
+		rewardUnit, u.Status, u.MicroAlgos, u.RewardedMicroAlgos, u.RewardsBase, rewardsLevel,
 	)
 	return u
 }
@@ -135,8 +135,13 @@ func (u *AccountData) Suspend() {
 }
 
 // Suspended returns true if the account is suspended (offline with keys)
-func (u *AccountData) Suspended() bool {
+func (u AccountData) Suspended() bool {
 	return u.Status == basics.Offline && !u.VoteID.IsEmpty()
+}
+
+// LastSeen returns the last round that the account was seen online
+func (u AccountData) LastSeen() basics.Round {
+	return max(u.LastProposed, u.LastHeartbeat)
 }
 
 // MinBalance computes the minimum balance requirements for an account based on
@@ -144,10 +149,10 @@ func (u *AccountData) Suspended() bool {
 // storage the account is allowed to store on disk.
 func (u AccountData) MinBalance(proto *config.ConsensusParams) basics.MicroAlgos {
 	return basics.MinBalance(
-		proto,
-		uint64(u.TotalAssets),
+		proto.BalanceRequirements(),
+		u.TotalAssets,
 		u.TotalAppSchema,
-		uint64(u.TotalAppParams), uint64(u.TotalAppLocalStates),
+		u.TotalAppParams, u.TotalAppLocalStates,
 		uint64(u.TotalExtraAppPages),
 		u.TotalBoxes, u.TotalBoxBytes,
 	)
@@ -168,29 +173,31 @@ func (u AccountData) IsZero() bool {
 }
 
 // Money is similar to basics account data Money function
-func (u AccountData) Money(proto config.ConsensusParams, rewardsLevel uint64) (money basics.MicroAlgos, rewards basics.MicroAlgos) {
-	e := u.WithUpdatedRewards(proto, rewardsLevel)
+func (u AccountData) Money(rewardUnit uint64, rewardsLevel uint64) (money basics.MicroAlgos, rewards basics.MicroAlgos) {
+	e := u.WithUpdatedRewards(rewardUnit, rewardsLevel)
 	return e.MicroAlgos, e.RewardedMicroAlgos
 }
 
 // OnlineAccountData calculates the online account data given an AccountData, by adding the rewards.
-func (u AccountData) OnlineAccountData(proto config.ConsensusParams, rewardsLevel uint64) basics.OnlineAccountData {
+func (u AccountData) OnlineAccountData(rewardUnit uint64, rewardsLevel uint64) basics.OnlineAccountData {
 	if u.Status != basics.Online {
 		// if the account is not Online and agreement requests it for some reason, clear it out
 		return basics.OnlineAccountData{}
 	}
 
 	microAlgos, _, _ := basics.WithUpdatedRewards(
-		proto, u.Status, u.MicroAlgos, u.RewardedMicroAlgos, u.RewardsBase, rewardsLevel,
+		rewardUnit, u.Status, u.MicroAlgos, u.RewardedMicroAlgos, u.RewardsBase, rewardsLevel,
 	)
 	return basics.OnlineAccountData{
 		MicroAlgosWithRewards: microAlgos,
 		VotingData:            u.VotingData,
 		IncentiveEligible:     u.IncentiveEligible,
+		LastProposed:          u.LastProposed,
+		LastHeartbeat:         u.LastHeartbeat,
 	}
 }
 
 // NormalizedOnlineBalance wraps basics.NormalizedOnlineAccountBalance
-func (u *AccountData) NormalizedOnlineBalance(genesisProto config.ConsensusParams) uint64 {
-	return basics.NormalizedOnlineAccountBalance(u.Status, u.RewardsBase, u.MicroAlgos, genesisProto)
+func (u *AccountData) NormalizedOnlineBalance(rewardUnit uint64) uint64 {
+	return basics.NormalizedOnlineAccountBalance(u.Status, u.RewardsBase, u.MicroAlgos, rewardUnit)
 }

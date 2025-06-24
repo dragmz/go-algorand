@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -415,7 +415,7 @@ func (cb *roundCowState) delKey(addr basics.Address, aidx basics.AppIndex, globa
 	// Write the value delta associated with deleting this key
 	lsd, err := cb.ensureStorageDelta(addr, aidx, global, remainAllocAction, accountIdx)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	vdelta, ok := lsd.kvCow[key]

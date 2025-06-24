@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -76,7 +76,7 @@ func (cl *converterTestLogger) Warnf(s string, args ...interface{}) {
 func TestWsPeerMsgDataConverterConvert(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
-	c := wsPeerMsgDataConverter{}
+	c := wsPeerMsgDataDecoder{}
 	c.ppdec = zstdProposalDecompressor{}
 	tag := protocol.AgreementVoteTag
 	data := []byte("data")

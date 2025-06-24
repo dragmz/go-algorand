@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -27,6 +27,7 @@ import (
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data/basics"
+	basics_testing "github.com/algorand/go-algorand/data/basics/testing"
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/ledger/ledgercore"
 	"github.com/algorand/go-algorand/ledger/store/trackerdb"
@@ -110,7 +111,9 @@ func commitSyncPartialComplete(t *testing.T, oa *onlineAccounts, ml *mockLedgerF
 	ml.trackers.lastFlushTime = dcc.flushTime
 
 	for _, lt := range ml.trackers.trackers {
-		lt.postCommitUnlocked(ml.trackers.ctx, dcc)
+		if lt, ok := lt.(trackerCommitLifetimeHandlers); ok {
+			lt.postCommitUnlocked(ml.trackers.ctx, dcc)
+		}
 	}
 }
 
@@ -1312,6 +1315,7 @@ func TestAcctOnlineVotersLongerHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, oa.latest()-basics.Round(conf.MaxAcctLookback), endRound)
 	require.Equal(t, maxBlocks-int(lowest)-int(conf.MaxAcctLookback)+1, len(dbOnlineRoundParams))
+	require.Equal(t, endRound, oa.cachedDBRoundOnline)
 
 	_, err = oa.onlineTotalsEx(lowest)
 	require.NoError(t, err)
@@ -1322,6 +1326,54 @@ func TestAcctOnlineVotersLongerHistory(t *testing.T) {
 	// ensure the cache size for addrA does not have more entries than maxBalLookback + 1
 	// +1 comes from the deletion before X without checking account state at X
 	require.Equal(t, maxBalLookback+1, oa.onlineAccountsCache.accounts[addrA].Len())
+
+	// Test if "excludeBefore" argument works for MakeOnlineAccountsIter & MakeOnlineRoundParamsIter
+	// when longer history is being used. Exclude rows older than round=lowest+2
+	excludeRound := lowest + 2
+
+	// Test MakeOnlineAccountsIter
+	var foundCount int
+	err = oa.dbs.Snapshot(func(ctx context.Context, tx trackerdb.SnapshotScope) error {
+		// read staging = false, excludeBefore = excludeRound
+		it, err2 := tx.MakeOrderedOnlineAccountsIter(ctx, false, excludeRound)
+		require.NoError(t, err2)
+		defer it.Close()
+
+		firstSeen := make(map[basics.Address]basics.Round)
+		for it.Next() {
+			acct, acctErr := it.GetItem()
+			require.NoError(t, acctErr)
+			// We expect all rows to either:
+			// - have updRound >= excludeRound
+			// - or have updRound < excludeRound, and only appear once in the iteration (no updates since excludeRound)
+			if acct.UpdateRound < excludeRound {
+				require.NotContains(t, firstSeen, acct.Address, "MakeOnlineAccountsIter produced two rows acct %s for dbRound %d updRound %d < excludeRound %d (first seen %d)", acct.Address, endRound, acct.UpdateRound, excludeRound, firstSeen[acct.Address])
+			}
+			firstSeen[acct.Address] = acct.UpdateRound
+			foundCount++
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.True(t, foundCount > 0, "Should see some accounts that satisfy updRound >= excludeRound")
+
+	// Test MakeOnlineRoundParamsIter
+	foundCount = 0
+	err = oa.dbs.Snapshot(func(ctx context.Context, tx trackerdb.SnapshotScope) error {
+		it, err2 := tx.MakeOnlineRoundParamsIter(ctx, false, excludeRound)
+		require.NoError(t, err2)
+		defer it.Close()
+
+		for it.Next() {
+			roundParams, roundParamsErr := it.GetItem()
+			require.NoError(t, roundParamsErr)
+			require.True(t, roundParams.Round >= excludeRound, "MakeOnlineRoundParamsIter produced row for round %d < excludeRound %d", roundParams.Round, excludeRound)
+			foundCount++
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, endRound-excludeRound+1, foundCount, "Should see all round params for rounds >= excludeRound")
 }
 
 // compareTopAccounts makes sure that accounts returned from OnlineTop function are sorted and contains the online accounts on the test
@@ -1340,7 +1392,7 @@ func compareTopAccounts(a *require.Assertions, testingResult []*ledgercore.Onlin
 			Address:                 expectedAccountsBalances[i].Addr,
 			MicroAlgos:              expectedAccountsBalances[i].MicroAlgos,
 			RewardsBase:             0,
-			NormalizedOnlineBalance: expectedAccountsBalances[i].NormalizedOnlineBalance(config.Consensus[protocol.ConsensusCurrentVersion]),
+			NormalizedOnlineBalance: expectedAccountsBalances[i].AccountData.NormalizedOnlineBalance(config.Consensus[protocol.ConsensusCurrentVersion].RewardUnit),
 			VoteFirstValid:          expectedAccountsBalances[i].VoteFirstValid,
 			VoteLastValid:           expectedAccountsBalances[i].VoteLastValid})
 	}
@@ -1970,12 +2022,12 @@ func TestAcctOnline_ExpiredOnlineCirculation(t *testing.T) {
 	stakeA := allAccts[0].MicroAlgos
 	statesA := map[acctState]ledgercore.AccountData{
 		acctStateOffline: {AccountBaseData: ledgercore.AccountBaseData{Status: basics.Offline, MicroAlgos: stakeA}, VotingData: basics.VotingData{}},
-		acctStateOnline:  {AccountBaseData: ledgercore.AccountBaseData{Status: basics.Online, MicroAlgos: stakeA}, VotingData: basics.VotingData(allAccts[0].OnlineAccountData().VotingData)},
+		acctStateOnline:  {AccountBaseData: ledgercore.AccountBaseData{Status: basics.Online, MicroAlgos: stakeA}, VotingData: basics.VotingData(basics_testing.OnlineAccountData(allAccts[0].AccountData).VotingData)},
 	}
 
 	addrB := allAccts[1].Addr
 	stakeB := allAccts[1].MicroAlgos
-	votingDataB := allAccts[1].OnlineAccountData().VotingData
+	votingDataB := basics_testing.OnlineAccountData(allAccts[1].AccountData).VotingData
 	statesB := map[acctState]ledgercore.AccountData{
 		acctStateOffline: {AccountBaseData: ledgercore.AccountBaseData{Status: basics.Offline, MicroAlgos: stakeB}, VotingData: basics.VotingData{}},
 		acctStateOnline:  {AccountBaseData: ledgercore.AccountBaseData{Status: basics.Online, MicroAlgos: stakeB}, VotingData: basics.VotingData(votingDataB)},
@@ -2106,7 +2158,7 @@ func TestAcctOnline_ExpiredOnlineCirculation(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				expiredAccts, err = reader.ExpiredOnlineAccountsForRound(rnd-1, targetVoteRnd, params, 0)
+				expiredAccts, err = reader.ExpiredOnlineAccountsForRound(rnd-1, targetVoteRnd, params.RewardUnit, 0)
 				if err != nil {
 					return err
 				}

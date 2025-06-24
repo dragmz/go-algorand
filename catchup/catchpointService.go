@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -317,7 +317,7 @@ func (cs *CatchpointCatchupService) processStageLedgerDownload() error {
 		start := time.Now()
 		err0 = lf.downloadLedger(cs.ctx, peer, round)
 		if err0 == nil {
-			cs.log.Infof("ledger downloaded in %d seconds", time.Since(start)/time.Second)
+			cs.log.Infof("ledger downloaded from %s in %d seconds", peerAddress(peer), time.Since(start)/time.Second)
 			start = time.Now()
 			err0 = cs.ledgerAccessor.BuildMerkleTrie(cs.ctx, cs.updateVerifiedCounts)
 			if err0 == nil {
@@ -325,8 +325,10 @@ func (cs *CatchpointCatchupService) processStageLedgerDownload() error {
 				break
 			}
 			// failed to build the merkle trie for the above catchpoint file.
+			cs.log.Infof("failed to build merkle trie for catchpoint file from %s: %v", peerAddress(peer), err0)
 			cs.blocksDownloadPeerSelector.rankPeer(psp, peerRankInvalidDownload)
 		} else {
+			cs.log.Infof("failed to download catchpoint ledger from peer %s: %v", peerAddress(peer), err0)
 			cs.blocksDownloadPeerSelector.rankPeer(psp, peerRankDownloadFailed)
 		}
 
@@ -550,7 +552,7 @@ func (cs *CatchpointCatchupService) processStageBlocksDownload() (err error) {
 	var blk *bookkeeping.Block
 	var cert *agreement.Certificate
 	for retryCount := uint64(1); blocksFetched <= lookback; {
-		if err := cs.ctx.Err(); err != nil {
+		if err1 := cs.ctx.Err(); err1 != nil {
 			return cs.stopOrAbort()
 		}
 
@@ -761,9 +763,8 @@ func (cs *CatchpointCatchupService) updateNodeCatchupMode(catchupModeEnabled boo
 	case newCtx, open := <-newCtxCh:
 		if open {
 			cs.ctx, cs.cancelCtxFunc = context.WithCancel(newCtx)
-		} else {
-			// channel is closed, this means that the node is stopping
 		}
+		// if channel is closed, this means that the node is stopping
 	case <-cs.ctx.Done():
 		// the node context was canceled before the SetCatchpointCatchupMode goroutine had
 		// the chance of completing. We At this point, the service is shutting down. However,
@@ -821,12 +822,14 @@ func (cs *CatchpointCatchupService) checkLedgerDownload() error {
 	for i := 0; i < cs.config.CatchupLedgerDownloadRetryAttempts; i++ {
 		psp, peerError := cs.blocksDownloadPeerSelector.getNextPeer()
 		if peerError != nil {
-			return err
+			cs.log.Debugf("checkLedgerDownload: error on getNextPeer: %s", peerError.Error())
+			return peerError
 		}
 		err = ledgerFetcher.headLedger(context.Background(), psp.Peer, round)
 		if err == nil {
 			return nil
 		}
+		cs.log.Debugf("checkLedgerDownload: failed to headLedger from peer %s: %v", peerAddress(psp.Peer), err)
 		// a non-nil error means that the catchpoint is not available, so we should rank it accordingly
 		cs.blocksDownloadPeerSelector.rankPeer(psp, peerRankNoCatchpointForRound)
 	}

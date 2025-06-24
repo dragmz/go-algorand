@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -224,7 +224,7 @@ func (sm *Manager) authMaybeRenewWalletHandleToken(walletHandleToken []byte, ren
 	}
 
 	// Compute how many seconds are left until the handle expires
-	expiresSeconds := int64(handle.expires.Sub(time.Now()).Seconds())
+	expiresSeconds := int64(time.Until(handle.expires).Seconds())
 
 	// Return the wallet and seconds remaining to expiration
 	return handle.wallet, expiresSeconds, nil

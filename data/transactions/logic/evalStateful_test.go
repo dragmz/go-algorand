@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -44,6 +44,7 @@ func makeApp(li uint64, lb uint64, gi uint64, gb uint64) basics.AppParams {
 			GlobalStateSchema: basics.StateSchema{NumUint: gi, NumByteSlice: gb},
 		},
 		ExtraProgramPages: 0,
+		Version:           0,
 	}
 }
 
@@ -1455,16 +1456,16 @@ func TestAppDisambiguation(t *testing.T) {
 					ep.UnnamedResources = &mockUnnamedResourcePolicy{allowEverything: true}
 				}
 				// make apps with identifiable properties, so we can tell what we get
-				makeIdentifiableApp := func(appID uint64) {
-					ledger.NewApp(tx.Sender, basics.AppIndex(appID), basics.AppParams{
+				makeIdentifiableApp := func(appID basics.AppIndex) {
+					ledger.NewApp(tx.Sender, appID, basics.AppParams{
 						GlobalState: map[string]basics.TealValue{"a": {
 							Type: basics.TealUintType,
-							Uint: appID,
+							Uint: uint64(appID),
 						}},
 						ExtraProgramPages: uint32(appID),
 					})
 					ledger.NewLocals(tx.Sender, appID)
-					ledger.NewLocal(tx.Sender, appID, "x", basics.TealValue{Type: basics.TealUintType, Uint: appID * 10})
+					ledger.NewLocal(tx.Sender, appID, "x", basics.TealValue{Type: basics.TealUintType, Uint: uint64(appID) * 10})
 				}
 				makeIdentifiableApp(1)
 				makeIdentifiableApp(20)
@@ -3250,6 +3251,9 @@ func TestReturnTypes(t *testing.T) {
 
 		"box_create": "int 9; +; box_create",                 // make the size match the 10 in CreateBox
 		"box_put":    "byte 0x010203040506; concat; box_put", // make the 4 byte arg into a 10
+
+		// mimc requires an input size multiple of 32 bytes.
+		"mimc": ": byte 0x0000000000000000000000000000000000000000000000000000000000000001; mimc BN254Mp110",
 	}
 
 	/* Make sure the specialCmd tests the opcode in question */

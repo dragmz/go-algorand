@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -566,7 +566,6 @@ func (c checkpointAction) do(ctx context.Context, s *Service) {
 		// we don't expect this to happen in recovery
 		s.log.with(logEvent).Errorf("checkpoint action for (%v, %v, %v) reached with nil completion channel", c.Round, c.Period, c.Step)
 	}
-	return
 }
 
 func (c checkpointAction) String() string {

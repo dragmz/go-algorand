@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -2543,6 +2543,7 @@ func TestAgreementServiceStartDeadline(t *testing.T) {
 	close(inputCh)
 	output := make(chan []action, 10)
 	ready := make(chan externalDemuxSignals, 1)
+	s.wg.Add(1)
 	s.mainLoop(inputCh, output, ready)
 
 	// check the ready channel:

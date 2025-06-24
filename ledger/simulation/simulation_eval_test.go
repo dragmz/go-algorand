@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -136,7 +136,7 @@ func validateSimulationResult(t *testing.T, result simulation.Result) {
 	}
 }
 
-const ignoreAppBudgetConsumed = math.MaxUint64
+const ignoreAppBudgetConsumed = math.MaxInt
 
 func simulationTest(t *testing.T, f func(env simulationtesting.Environment) simulationTestCase) {
 	t.Helper()
@@ -174,7 +174,7 @@ func runSimulationTestCase(t *testing.T, env simulationtesting.Environment, test
 		if testcase.expected.TxnGroups[i].AppBudgetConsumed == ignoreAppBudgetConsumed {
 			// This test does not care about the app budget consumed. Replace it with the actual value.
 			// But let's still ensure it's the sum of budgets consumed in this group.
-			var sum uint64
+			var sum int
 			for _, txn := range actual.TxnGroups[i].Txns {
 				sum += txn.AppBudgetConsumed
 			}
@@ -566,7 +566,7 @@ btoi`)
 		name          string
 		arguments     [][]byte
 		expectedError string
-		cost          uint64
+		cost          int
 	}{
 		{
 			name:          "approval",
@@ -623,7 +623,7 @@ int 1`,
 				expectedSuccess := len(testCase.expectedError) == 0
 				var expectedAppCallAD transactions.ApplyData
 				expectedFailedAt := simulation.TxnPath{1}
-				var AppBudgetConsumed, AppBudgetAdded uint64
+				var AppBudgetConsumed, AppBudgetAdded int
 				if expectedSuccess {
 					expectedAppCallAD = transactions.ApplyData{
 						ApplicationID: 1002,
@@ -1219,7 +1219,7 @@ func TestAppCallWithExtraBudget(t *testing.T) {
 
 		signedCreateTxn := createTxn.Txn().Sign(sender.Sk)
 		signedExpensiveTxn := expensiveTxn.Txn().Sign(sender.Sk)
-		extraOpcodeBudget := uint64(100)
+		extraOpcodeBudget := 100
 
 		return simulationTestCase{
 			input: simulation.Request{
@@ -1293,7 +1293,7 @@ func TestAppCallWithExtraBudgetReturningPC(t *testing.T) {
 
 		signedCreateTxn := createTxn.Txn().Sign(sender.Sk)
 		signedExpensiveTxn := expensiveTxn.Txn().Sign(sender.Sk)
-		extraOpcodeBudget := uint64(100)
+		extraOpcodeBudget := 100
 
 		commonLeadingSteps := []simulation.OpcodeTraceUnit{
 			{PC: 1}, {PC: 4}, {PC: 6},
@@ -1308,7 +1308,7 @@ func TestAppCallWithExtraBudgetReturningPC(t *testing.T) {
 		secondTrace := make([]simulation.OpcodeTraceUnit, len(commonLeadingSteps))
 		copy(secondTrace, commonLeadingSteps[:])
 		for i := 9; i <= 1409; i++ {
-			secondTrace = append(secondTrace, simulation.OpcodeTraceUnit{PC: uint64(i)})
+			secondTrace = append(secondTrace, simulation.OpcodeTraceUnit{PC: i})
 		}
 
 		return simulationTestCase{
@@ -1396,7 +1396,7 @@ func TestAppCallWithExtraBudgetOverBudget(t *testing.T) {
 		signedCreateTxn := createTxn.Txn().Sign(sender.Sk)
 		signedExpensiveTxn := expensiveTxn.Txn().Sign(sender.Sk)
 		// Add a small bit of extra budget, but not enough
-		extraBudget := uint64(5)
+		extraBudget := 5
 
 		return simulationTestCase{
 			input: simulation.Request{
@@ -1832,7 +1832,7 @@ int 1`
 		signedCreateTxn := createTxn.Txn().Sign(sender.Sk)
 		signedCallsABunchLogs := callsABunchLogs.Txn().Sign(sender.Sk)
 
-		expectedMaxLogCalls, expectedMaxLogSize := uint64(2048), uint64(65536)
+		expectedMaxLogCalls, expectedMaxLogSize := 2048, 65536
 		expectedLog := make([]string, LogTimes)
 		for i := 0; i < LogTimes; i++ {
 			expectedLog[i] = LogLongLine
@@ -1924,7 +1924,7 @@ int 1`
 		signedCreateTxn := createTxn.Txn().Sign(sender.Sk)
 		signedCallsABunchLogs := callsABunchLogs.Txn().Sign(sender.Sk)
 
-		expectedMaxLogCalls, expectedMaxLogSize := uint64(2048), uint64(65536)
+		expectedMaxLogCalls, expectedMaxLogSize := 2048, 65536
 		actualLogTimes := 65536 / len(LogLongLine)
 		expectedLog := make([]string, actualLogTimes)
 		for i := 0; i < actualLogTimes; i++ {
@@ -4827,7 +4827,7 @@ int 1`,
 		for i, boxOp := range testcase.boxOpsForSimulate {
 			txnResults[i] = boxOpToSimResult(boxOp)
 		}
-		totalConsumed := uint64(0)
+		totalConsumed := 0
 		for _, txnResult := range txnResults {
 			totalConsumed += txnResult.AppBudgetConsumed
 		}
@@ -4871,7 +4871,7 @@ int 1`,
 				TxnGroups: []simulation.TxnGroupResult{
 					{
 						Txns:              txnResults,
-						AppBudgetAdded:    700 * uint64(len(txnResults)),
+						AppBudgetAdded:    700 * len(txnResults),
 						AppBudgetConsumed: totalConsumed,
 					},
 				},
@@ -5174,7 +5174,7 @@ int 1
 		for i, boxOp := range testcase.boxOpsForSimulate {
 			txnResults[i] = boxOpToSimResult(boxOp)
 		}
-		totalConsumed := uint64(0)
+		totalConsumed := 0
 		for _, txnResult := range txnResults {
 			totalConsumed += txnResult.AppBudgetConsumed
 		}
@@ -5218,7 +5218,7 @@ int 1
 				TxnGroups: []simulation.TxnGroupResult{
 					{
 						Txns:              txnResults,
-						AppBudgetAdded:    700 * uint64(len(txnResults)),
+						AppBudgetAdded:    700 * len(txnResults),
 						AppBudgetConsumed: totalConsumed,
 					},
 				},
@@ -5472,7 +5472,7 @@ int 1`,
 			newlyCreatedGlobalKeySet.Add(string(txnArgs[1]))
 		}
 
-		totalConsumed := uint64(0)
+		totalConsumed := 0
 		for _, txnResult := range txnResults {
 			totalConsumed += txnResult.AppBudgetConsumed
 		}
@@ -5498,7 +5498,7 @@ int 1`,
 				TxnGroups: []simulation.TxnGroupResult{
 					{
 						Txns:              txnResults,
-						AppBudgetAdded:    700 * uint64(len(txnResults)),
+						AppBudgetAdded:    700 * len(txnResults),
 						AppBudgetConsumed: totalConsumed,
 					},
 				},
@@ -5839,7 +5839,7 @@ int 1`,
 			newlyCreatedLocalStates[acctAddress].Add(string(instruction.appArgs[1]))
 		}
 
-		totalConsumed := uint64(0)
+		totalConsumed := 0
 		for _, txnResult := range txnResults {
 			totalConsumed += txnResult.AppBudgetConsumed
 		}
@@ -5870,7 +5870,7 @@ int 1`,
 				TxnGroups: []simulation.TxnGroupResult{
 					{
 						Txns:              txnResults,
-						AppBudgetAdded:    700 * uint64(len(txnResults)),
+						AppBudgetAdded:    700 * len(txnResults),
 						AppBudgetConsumed: totalConsumed,
 					},
 				},
@@ -6151,7 +6151,7 @@ int 1`,
 			},
 		}
 
-		totalConsumed := uint64(0)
+		totalConsumed := 0
 		for _, txnResult := range txnResults {
 			totalConsumed += txnResult.AppBudgetConsumed
 		}
@@ -6177,7 +6177,7 @@ int 1`,
 				TxnGroups: []simulation.TxnGroupResult{
 					{
 						Txns:              txnResults,
-						AppBudgetAdded:    700 * uint64(len(txnResults)),
+						AppBudgetAdded:    700 * len(txnResults),
 						AppBudgetConsumed: totalConsumed,
 					},
 				},
@@ -6961,6 +6961,9 @@ func TestUnnamedResources(t *testing.T) {
 				env.OptIntoApp(otherAppUser, otherAppID)
 
 				proto := env.TxnInfo.CurrentProtocolParams()
+				if v > int(proto.LogicSigVersion) {
+					t.Skip("not testing in unsupported proto")
+				}
 				expectedUnnamedResourceGroupAssignment := &simulation.ResourceTracker{
 					MaxAccounts:               proto.MaxTxGroupSize * (proto.MaxAppTxnAccounts + proto.MaxAppTxnForeignApps),
 					MaxAssets:                 proto.MaxTxGroupSize * proto.MaxAppTxnForeignAssets,
@@ -7167,7 +7170,7 @@ func TestUnnamedResources(t *testing.T) {
 										UnnamedResourcesAccessed: expectedUnnamedResourceTxnAssignment,
 									},
 								},
-								AppBudgetAdded:           700 + 700*uint64(innerCount),
+								AppBudgetAdded:           700 + 700*innerCount,
 								AppBudgetConsumed:        ignoreAppBudgetConsumed,
 								UnnamedResourcesAccessed: expectedUnnamedResourceGroupAssignment,
 							},
@@ -7195,6 +7198,11 @@ func TestUnnamedResourcesAccountLocalWrite(t *testing.T) {
 			simulationTest(t, func(env simulationtesting.Environment) simulationTestCase {
 				sender := env.Accounts[0]
 				testAppUser := env.Accounts[1].Addr
+
+				proto := env.TxnInfo.CurrentProtocolParams()
+				if v > int(proto.LogicSigVersion) {
+					t.Skip("not testing in unsupported proto")
+				}
 
 				program := fmt.Sprintf(`#pragma version %d
 txn ApplicationID
@@ -7232,7 +7240,6 @@ int 1
 				})
 				stxn := txn.Txn().Sign(sender.Sk)
 
-				proto := env.TxnInfo.CurrentProtocolParams()
 				expectedUnnamedResourceAssignment := &simulation.ResourceTracker{
 					MaxAccounts:               proto.MaxTxGroupSize * (proto.MaxAppTxnAccounts + proto.MaxAppTxnForeignApps),
 					MaxAssets:                 proto.MaxTxGroupSize * proto.MaxAppTxnForeignAssets,
@@ -7338,6 +7345,11 @@ func TestUnnamedResourcesCreatedAppsAndAssets(t *testing.T) {
 		t.Run(fmt.Sprintf("v%d", v), func(t *testing.T) {
 			t.Parallel()
 			simulationTest(t, func(env simulationtesting.Environment) simulationTestCase {
+				proto := env.TxnInfo.CurrentProtocolParams()
+				if v > int(proto.LogicSigVersion) {
+					t.Skip("not testing in unsupported proto")
+				}
+
 				sender := env.Accounts[0]
 				otherResourceCreator := env.Accounts[1]
 				otherAccount := env.Accounts[2].Addr
@@ -7435,7 +7447,6 @@ int 1
 				appCreateStxn := appCreateTxn.Txn().Sign(otherResourceCreator.Sk)
 				appCallStxn := appCallTxn.Txn().Sign(sender.Sk)
 
-				proto := env.TxnInfo.CurrentProtocolParams()
 				expectedUnnamedResourceAssignment := simulation.ResourceTracker{
 					MaxAccounts:  (proto.MaxTxGroupSize - 1) * (proto.MaxAppTxnAccounts + proto.MaxAppTxnForeignApps),
 					MaxAssets:    (proto.MaxTxGroupSize - 1) * proto.MaxAppTxnForeignAssets,
@@ -7642,7 +7653,7 @@ func testUnnamedBoxOperations(t *testing.T, env simulationtesting.Environment, a
 
 	var failedAt simulation.TxnPath
 	if expected.FailureMessage != "" {
-		failedAt = simulation.TxnPath{uint64(expected.FailingIndex)}
+		failedAt = simulation.TxnPath{expected.FailingIndex}
 	}
 
 	proto := env.TxnInfo.CurrentProtocolParams()
@@ -7675,7 +7686,7 @@ func testUnnamedBoxOperations(t *testing.T, env simulationtesting.Environment, a
 			TxnGroups: []simulation.TxnGroupResult{
 				{
 					Txns:                     expectedTxnResults,
-					AppBudgetAdded:           uint64(700 * len(boxOps)),
+					AppBudgetAdded:           700 * len(boxOps),
 					AppBudgetConsumed:        ignoreAppBudgetConsumed,
 					UnnamedResourcesAccessed: expectedUnnamedResources,
 					FailedAt:                 failedAt,
@@ -7702,14 +7713,17 @@ func TestUnnamedResourcesBoxIOBudget(t *testing.T) {
 			env := simulationtesting.PrepareSimulatorTest(t)
 			defer env.Close()
 
+			proto := env.TxnInfo.CurrentProtocolParams()
+			if v > int(proto.LogicSigVersion) {
+				t.Skip("not testing in unsupported proto")
+			}
+
 			sender := env.Accounts[0]
 
 			appID := env.CreateApp(sender.Addr, simulationtesting.AppParams{
 				ApprovalProgram:   fmt.Sprintf(boxTestProgram, v),
 				ClearStateProgram: fmt.Sprintf("#pragma version %d\n int 1", v),
 			})
-
-			proto := env.TxnInfo.CurrentProtocolParams()
 
 			// MBR is needed for boxes.
 			transferable := env.Accounts[1].AcctData.MicroAlgos.Raw - proto.MinBalance - proto.MinTxnFee
@@ -8441,7 +8455,7 @@ func boxNamesToRefs(app basics.AppIndex, names []string) []logic.BoxRef {
 	return refs
 }
 
-func testUnnamedResourceLimits(t *testing.T, env simulationtesting.Environment, appVersion int, app basics.AppIndex, resources unnamedResourceArguments, otherTxns []txntest.Txn, extraBudget uint64, expectedError string) {
+func testUnnamedResourceLimits(t *testing.T, env simulationtesting.Environment, appVersion int, app basics.AppIndex, resources unnamedResourceArguments, otherTxns []txntest.Txn, extraBudget int, expectedError string) {
 	t.Helper()
 	maxGroupSize := env.TxnInfo.CurrentProtocolParams().MaxTxGroupSize
 	txns := make([]*txntest.Txn, maxGroupSize)
@@ -8560,7 +8574,7 @@ func testUnnamedResourceLimits(t *testing.T, env simulationtesting.Environment, 
 			TxnGroups: []simulation.TxnGroupResult{
 				{
 					Txns:                     expectedTxnResults,
-					AppBudgetAdded:           uint64(700) + extraBudget,
+					AppBudgetAdded:           700 + extraBudget,
 					AppBudgetConsumed:        ignoreAppBudgetConsumed,
 					UnnamedResourcesAccessed: expectedGroupResources,
 					FailedAt:                 failedAt,
@@ -8587,6 +8601,10 @@ func TestUnnamedResourcesLimits(t *testing.T) {
 			defer env.Close()
 
 			proto := env.TxnInfo.CurrentProtocolParams()
+			if v > int(proto.LogicSigVersion) {
+				t.Skip("not testing in unsupported proto")
+				return
+			}
 
 			sender := env.Accounts[0]
 			otherAccounts := make([]basics.Address, len(env.Accounts)-1)
@@ -8753,6 +8771,10 @@ func TestUnnamedResourcesCrossProductLimits(t *testing.T) {
 			defer env.Close()
 
 			proto := env.TxnInfo.CurrentProtocolParams()
+			if v > int(proto.LogicSigVersion) {
+				t.Skip("not testing in unsupported proto")
+				return
+			}
 
 			sender := env.Accounts[0]
 			otherAccounts := make([]basics.Address, proto.MaxTxGroupSize)

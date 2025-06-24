@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -69,7 +69,7 @@ func backoffFactory() backoff.BackoffFactory {
 	return backoff.NewExponentialDecorrelatedJitter(minBackoff, maxBackoff, baseBackoff, rand.NewSource(rand.Int63()))
 }
 
-// MakeDiscovery creates a discovery.Discovery object using backoff and cacching
+// MakeDiscovery creates a discovery.Discovery object using backoff and caching
 func MakeDiscovery(r crouting.ContentRouting) (discovery.Discovery, error) {
-	return backoff.NewBackoffDiscovery(routing.NewRoutingDiscovery(r), backoffFactory(), backoff.WithBackoffDiscoveryReturnedChannelSize(0), backoff.WithBackoffDiscoverySimultaneousQueryBufferSize(0))
+	return backoff.NewBackoffDiscovery(routing.NewRoutingDiscovery(r), backoffFactory())
 }

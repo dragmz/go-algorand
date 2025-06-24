@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -441,7 +441,7 @@ func TestAppCallCreate(t *testing.T) {
 	// no balance record
 	appIdx, err := createApplication(&ac, b, creator, txnCounter)
 	a.Error(err)
-	a.Equal(basics.AppIndex(0), appIdx)
+	a.Zero(appIdx)
 
 	b.balances = make(map[basics.Address]basics.AccountData)
 	b.balances[creator] = basics.AccountData{}

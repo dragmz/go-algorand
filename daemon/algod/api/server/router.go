@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -107,6 +107,7 @@ func NewRouter(logger logging.Logger, node APINodeInterface, shutdown <-chan str
 		middleware.RemoveTrailingSlash())
 	e.Use(
 		middlewares.MakeLogger(logger),
+		middleware.Gzip(),
 	)
 	// Optional middleware for Private Network Access Header (PNA). Must come before CORS middleware.
 	if node.Config().EnablePrivateNetworkAccessHeader {

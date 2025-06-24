@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -46,9 +46,14 @@ import (
 )
 
 type balanceRecord struct {
-	addr     basics.Address
-	auth     basics.Address
-	balance  uint64
+	addr    basics.Address
+	auth    basics.Address
+	balance uint64
+	voting  basics.VotingData
+
+	proposed  basics.Round // The last round that this account proposed the accepted block
+	heartbeat basics.Round // The last round that this account sent a heartbeat to show it was online.
+
 	locals   map[basics.AppIndex]basics.TealKeyValue
 	holdings map[basics.AssetIndex]basics.AssetHolding
 	mods     map[basics.AppIndex]map[string]basics.ValueDelta
@@ -165,41 +170,41 @@ func (l *Ledger) Counter() uint64 {
 }
 
 // NewHolding sets the ASA balance of a given account.
-func (l *Ledger) NewHolding(addr basics.Address, assetID uint64, amount uint64, frozen bool) {
+func (l *Ledger) NewHolding(addr basics.Address, assetID basics.AssetIndex, amount uint64, frozen bool) {
 	br, ok := l.balances[addr]
 	if !ok {
 		br = newBalanceRecord(addr, 0)
 	}
-	br.holdings[basics.AssetIndex(assetID)] = basics.AssetHolding{Amount: amount, Frozen: frozen}
+	br.holdings[assetID] = basics.AssetHolding{Amount: amount, Frozen: frozen}
 	l.balances[addr] = br
 }
 
 // NewLocals essentially "opts in" an address to an app id.
-func (l *Ledger) NewLocals(addr basics.Address, appID uint64) {
+func (l *Ledger) NewLocals(addr basics.Address, appID basics.AppIndex) {
 	if _, ok := l.balances[addr]; !ok {
 		l.balances[addr] = newBalanceRecord(addr, 0)
 	}
-	l.balances[addr].locals[basics.AppIndex(appID)] = basics.TealKeyValue{}
+	l.balances[addr].locals[appID] = basics.TealKeyValue{}
 }
 
 // NewLocal sets a local value of an app on an address
-func (l *Ledger) NewLocal(addr basics.Address, appID uint64, key string, value basics.TealValue) {
-	l.balances[addr].locals[basics.AppIndex(appID)][key] = value
+func (l *Ledger) NewLocal(addr basics.Address, appID basics.AppIndex, key string, value basics.TealValue) {
+	l.balances[addr].locals[appID][key] = value
 }
 
 // NoLocal removes a key from an address locals for an app.
-func (l *Ledger) NoLocal(addr basics.Address, appID uint64, key string) {
-	delete(l.balances[addr].locals[basics.AppIndex(appID)], key)
+func (l *Ledger) NoLocal(addr basics.Address, appID basics.AppIndex, key string) {
+	delete(l.balances[addr].locals[appID], key)
 }
 
 // NewGlobal sets a global value for an app
-func (l *Ledger) NewGlobal(appID uint64, key string, value basics.TealValue) {
-	l.applications[basics.AppIndex(appID)].GlobalState[key] = value
+func (l *Ledger) NewGlobal(appID basics.AppIndex, key string, value basics.TealValue) {
+	l.applications[appID].GlobalState[key] = value
 }
 
 // NoGlobal removes a global key for an app
-func (l *Ledger) NoGlobal(appID uint64, key string) {
-	delete(l.applications[basics.AppIndex(appID)].GlobalState, key)
+func (l *Ledger) NoGlobal(appID basics.AppIndex, key string) {
+	delete(l.applications[appID].GlobalState, key)
 }
 
 // Rekey sets the authAddr for an address.
@@ -312,7 +317,11 @@ func (l *Ledger) AccountData(addr basics.Address) (ledgercore.AccountData, error
 
 			TotalBoxes:    uint64(boxesTotal),
 			TotalBoxBytes: uint64(boxBytesTotal),
+
+			LastProposed:  br.proposed,
+			LastHeartbeat: br.heartbeat,
 		},
+		VotingData: br.voting,
 	}, nil
 }
 
@@ -329,6 +338,9 @@ func (l *Ledger) AgreementData(addr basics.Address) (basics.OnlineAccountData, e
 	// paid. Here, we ignore that for simple tests.
 	return basics.OnlineAccountData{
 		MicroAlgosWithRewards: ad.MicroAlgos,
+		// VotingData is not exposed to `voter_params_get`, the thinking is that
+		// we don't want them used as "free" storage. And thus far, we don't
+		// have compelling reasons to examine them in AVM.
 		VotingData: basics.VotingData{
 			VoteID:          ad.VoteID,
 			SelectionID:     ad.SelectionID,
@@ -841,6 +853,7 @@ func (l *Ledger) appl(from basics.Address, appl transactions.ApplicationCallTxnF
 				},
 			},
 			ExtraProgramPages: appl.ExtraProgramPages,
+			Version:           0,
 		}
 		l.NewApp(from, aid, params)
 		ad.ApplicationID = aid
@@ -903,6 +916,7 @@ func (l *Ledger) appl(from basics.Address, appl transactions.ApplicationCallTxnF
 		}
 		app.ApprovalProgram = appl.ApprovalProgram
 		app.ClearStateProgram = appl.ClearStateProgram
+		app.Version++
 		l.applications[aid] = app
 	}
 	return nil
@@ -940,7 +954,7 @@ func (l *Ledger) Perform(gi int, ep *EvalParams) error {
 }
 
 // Get returns the AccountData of an address. This test ledger does
-// not handle rewards, so the pening rewards flag is ignored.
+// not handle rewards, so withPendingRewards is ignored.
 func (l *Ledger) Get(addr basics.Address, withPendingRewards bool) (basics.AccountData, error) {
 	br, ok := l.balances[addr]
 	if !ok {
@@ -952,6 +966,17 @@ func (l *Ledger) Get(addr basics.Address, withPendingRewards bool) (basics.Accou
 		Assets:         map[basics.AssetIndex]basics.AssetHolding{},
 		AppLocalStates: map[basics.AppIndex]basics.AppLocalState{},
 		AppParams:      map[basics.AppIndex]basics.AppParams{},
+		LastProposed:   br.proposed,
+		LastHeartbeat:  br.heartbeat,
+		// The fields below are not exposed to `acct_params_get`, the thinking
+		// is that we don't want them used as "free" storage.  And thus far, we
+		// don't have compelling reasons to examine them in AVM.
+		VoteID:          br.voting.VoteID,
+		SelectionID:     br.voting.SelectionID,
+		StateProofID:    br.voting.StateProofID,
+		VoteFirstValid:  br.voting.VoteFirstValid,
+		VoteLastValid:   br.voting.VoteLastValid,
+		VoteKeyDilution: br.voting.VoteKeyDilution,
 	}, nil
 }
 
@@ -971,9 +996,9 @@ func (l *Ledger) GetCreator(cidx basics.CreatableIndex, ctype basics.CreatableTy
 // SetKey creates a new key-value in {addr, aidx, global} storage
 func (l *Ledger) SetKey(addr basics.Address, aidx basics.AppIndex, global bool, key string, value basics.TealValue, accountIdx uint64) error {
 	if global {
-		l.NewGlobal(uint64(aidx), key, value)
+		l.NewGlobal(aidx, key, value)
 	} else {
-		l.NewLocal(addr, uint64(aidx), key, value)
+		l.NewLocal(addr, aidx, key, value)
 	}
 	return nil
 }
@@ -981,9 +1006,9 @@ func (l *Ledger) SetKey(addr basics.Address, aidx basics.AppIndex, global bool, 
 // DelKey removes a key from {addr, aidx, global} storage
 func (l *Ledger) DelKey(addr basics.Address, aidx basics.AppIndex, global bool, key string, accountIdx uint64) error {
 	if global {
-		l.NoGlobal(uint64(aidx), key)
+		l.NoGlobal(aidx, key)
 	} else {
-		l.NoLocal(addr, uint64(aidx), key)
+		l.NoLocal(addr, aidx, key)
 	}
 	return nil
 }

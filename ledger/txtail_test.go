@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -83,7 +83,7 @@ func TestTxTailCheckdup(t *testing.T) {
 				Note: []byte{byte(rnd % 256), byte(rnd / 256), byte(1)},
 			},
 		}
-		err := tail.checkDup(proto, basics.Round(0), basics.Round(0), rnd+txvalidity, Txn.ID(), ledgercore.Txlease{})
+		err := tail.checkDup(proto, 0, 0, rnd+txvalidity, Txn.ID(), ledgercore.Txlease{})
 		require.Errorf(t, err, "round %d", rnd)
 		if rnd < lastRound-lookback-txvalidity-1 {
 			var missingRoundErr *errTxTailMissingRound

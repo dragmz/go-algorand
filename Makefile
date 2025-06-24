@@ -20,12 +20,13 @@ else
 endif
 S3_RELEASE_BUCKET = $$S3_RELEASE_BUCKET
 
-GOLANG_VERSIONS				:= $(shell ./scripts/get_golang_version.sh all)
-GOLANG_VERSION_BUILD		:= $(firstword $(GOLANG_VERSIONS))
-GOLANG_VERSION_SUPPORT		:= $(lastword $(GOLANG_VERSIONS))
-GOLANG_VERSION_BUILD_MAJOR	:= $(shell echo $(GOLANG_VERSION_BUILD) | cut -d'.' -f1,2)
-CURRENT_GO_VERSION			:= $(shell go version | cut -d " " -f 3 | tr -d 'go')
-CURRENT_GO_VERSION_MAJOR	:= $(shell echo $(CURRENT_GO_VERSION) | cut -d'.' -f1,2)
+GOLANG_VERSIONS            := $(shell ./scripts/get_golang_version.sh all)
+GOLANG_VERSION_BUILD       := $(firstword $(GOLANG_VERSIONS))
+GOLANG_VERSION_BUILD_MAJOR := $(shell echo $(GOLANG_VERSION_BUILD) | cut -d'.' -f1,2)
+GOLANG_VERSION_MIN         := $(lastword $(GOLANG_VERSIONS))
+GOLANG_VERSION_SUPPORT     := $(shell echo $(GOLANG_VERSION_MIN) | cut -d'.' -f1,2)
+CURRENT_GO_VERSION         := $(shell go version | cut -d " " -f 3 | tr -d 'go')
+CURRENT_GO_VERSION_MAJOR   := $(shell echo $(CURRENT_GO_VERSION) | cut -d'.' -f1,2)
 
 # If build number already set, use it - to ensure same build number across multiple platforms being built
 BUILDNUMBER      ?= $(shell ./scripts/compute_build_number.sh)
@@ -50,11 +51,6 @@ export GOTESTCOMMAND=gotestsum --format pkgname --jsonfile testresults.json --
 endif
 
 ifeq ($(OS_TYPE), darwin)
-# For Xcode >= 15, set -no_warn_duplicate_libraries linker option
-CLANG_MAJOR_VERSION := $(shell clang --version | grep '^Apple clang version ' | awk '{print $$4}' | cut -d. -f1)
-ifeq ($(shell [ $(CLANG_MAJOR_VERSION) -ge 15 ] && echo true), true)
-EXTLDFLAGS := -Wl,-no_warn_duplicate_libraries
-endif
 # M1 Mac--homebrew install location in /opt/homebrew
 ifeq ($(ARCH), arm64)
 export CPATH=/opt/homebrew/include
@@ -147,6 +143,13 @@ generate: deps
 
 msgp: $(patsubst %,%/msgp_gen.go,$(MSGP_GENERATE))
 
+api:
+	make -C daemon/algod/api
+
+logic:
+	make -C data/transactions/logic
+
+
 %/msgp_gen.go: deps ALWAYS
 		@set +e; \
 		printf "msgp: $(@D)..."; \
@@ -176,16 +179,16 @@ universal:
 ifeq ($(OS_TYPE),darwin)
 	# build amd64 Mac binaries
 	mkdir -p $(GOPATH1)/bin-darwin-amd64
-	CROSS_COMPILE_ARCH=amd64 GOBIN=$(GOPATH1)/bin-darwin-amd64 MACOSX_DEPLOYMENT_TARGET=12.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch x86_64 -mmacos-version-min=12.0" --host=x86_64-apple-darwin' $(MAKE)
+	CROSS_COMPILE_ARCH=amd64 GOBIN=$(GOPATH1)/bin-darwin-amd64 MACOSX_DEPLOYMENT_TARGET=13.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch x86_64 -mmacos-version-min=13.0" --host=x86_64-apple-darwin' $(MAKE)
 
 	# build arm64 Mac binaries
 	mkdir -p $(GOPATH1)/bin-darwin-arm64
-	CROSS_COMPILE_ARCH=arm64 GOBIN=$(GOPATH1)/bin-darwin-arm64 MACOSX_DEPLOYMENT_TARGET=12.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch arm64 -mmacos-version-min=12.0" --host=aarch64-apple-darwin' $(MAKE)
+	CROSS_COMPILE_ARCH=arm64 GOBIN=$(GOPATH1)/bin-darwin-arm64 MACOSX_DEPLOYMENT_TARGET=13.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch arm64 -mmacos-version-min=13.0" --host=aarch64-apple-darwin' $(MAKE)
 
 	# same for buildsrc-special
 	cd tools/block-generator && \
-	CROSS_COMPILE_ARCH=amd64 GOBIN=$(GOPATH1)/bin-darwin-amd64 MACOSX_DEPLOYMENT_TARGET=12.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch x86_64 -mmacos-version-min=12.0" --host=x86_64-apple-darwin' $(MAKE)
-	CROSS_COMPILE_ARCH=arm64 GOBIN=$(GOPATH1)/bin-darwin-arm64 MACOSX_DEPLOYMENT_TARGET=12.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch arm64 -mmacos-version-min=12.0" --host=aarch64-apple-darwin' $(MAKE)
+	CROSS_COMPILE_ARCH=amd64 GOBIN=$(GOPATH1)/bin-darwin-amd64 MACOSX_DEPLOYMENT_TARGET=13.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch x86_64 -mmacos-version-min=13.0" --host=x86_64-apple-darwin' $(MAKE)
+	CROSS_COMPILE_ARCH=arm64 GOBIN=$(GOPATH1)/bin-darwin-arm64 MACOSX_DEPLOYMENT_TARGET=13.0 EXTRA_CONFIGURE_FLAGS='CFLAGS="-arch arm64 -mmacos-version-min=13.0" --host=aarch64-apple-darwin' $(MAKE)
 
 	# lipo together
 	mkdir -p $(GOPATH1)/bin
@@ -293,6 +296,9 @@ $(GOPATH1)/bin/%:
 test: build
 	$(GOTESTCOMMAND) $(GOTAGS) -race $(UNIT_TEST_SOURCES) -timeout 1h -coverprofile=coverage.txt -covermode=atomic
 
+testc:
+	echo $(UNIT_TEST_SOURCES) | xargs -P8 -n1 go test -c
+
 benchcheck: build
 	$(GOTESTCOMMAND) $(GOTAGS) -race $(UNIT_TEST_SOURCES) -run ^NOTHING -bench Benchmark -benchtime 1x -timeout 1h
 
@@ -331,7 +337,11 @@ node_exporter: $(GOPATH1)/bin/node_exporter
 $(GOPATH1)/bin/node_exporter:
 	mkdir -p $(GOPATH1)/bin && \
 	cd $(GOPATH1)/bin && \
-	tar -xzvf $(SRCPATH)/installer/external/node_exporter-stable-$(shell ./scripts/ostype.sh)-$(shell uname -m | tr '[:upper:]' '[:lower:]').tar.gz && \
+	if [ -z "$(CROSS_COMPILE_ARCH)" ]; then \
+		tar -xzvf $(SRCPATH)/installer/external/node_exporter-stable-$(shell ./scripts/ostype.sh)-$(shell uname -m | tr '[:upper:]' '[:lower:]').tar.gz; \
+	else \
+		tar -xzvf $(SRCPATH)/installer/external/node_exporter-stable-$(shell ./scripts/ostype.sh)-universal.tar.gz; \
+	fi && \
 	cd -
 
 # deploy

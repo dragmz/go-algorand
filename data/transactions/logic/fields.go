@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@ import (
 	"github.com/algorand/go-algorand/protocol"
 )
 
-//go:generate stringer -type=TxnField,GlobalField,AssetParamsField,AppParamsField,AcctParamsField,AssetHoldingField,OnCompletionConstType,EcdsaCurve,EcGroup,Base64Encoding,JSONRefType,VoterParamsField,VrfStandard,BlockField -output=fields_string.go
+//go:generate stringer -type=TxnField,GlobalField,AssetParamsField,AppParamsField,AcctParamsField,AssetHoldingField,OnCompletionConstType,EcdsaCurve,EcGroup,MimcConfig,Base64Encoding,JSONRefType,VoterParamsField,VrfStandard,BlockField -output=fields_string.go
 
 // FieldSpec unifies the various specs for assembly, disassembly, and doc generation.
 type FieldSpec interface {
@@ -213,6 +213,9 @@ const (
 	// NumClearStateProgramPages = len(ClearStateProgramPages) // 4096
 	NumClearStateProgramPages
 
+	// RejectVersion uint64
+	RejectVersion
+
 	invalidTxnField // compile-time constant for number of fields
 )
 
@@ -344,7 +347,7 @@ var txnFieldSpecs = [...]txnFieldSpec{
 	{LastLog, StackBytes, false, 6, 0, true, "The last message emitted. Empty bytes if none were emitted"},
 
 	// Not an effect. Just added after the effects fields.
-	{StateProofPK, StackBytes, false, 6, 6, false, "64 byte state proof public key"},
+	{StateProofPK, StackBytes64, false, 6, 6, false, "State proof public key"},
 
 	// Pseudo-fields to aid access to large programs (bigger than TEAL values)
 	// reading in a txn seems not *super* useful, but setting in `itxn` is critical to inner app factories
@@ -352,6 +355,8 @@ var txnFieldSpecs = [...]txnFieldSpec{
 	{NumApprovalProgramPages, StackUint64, false, 7, 0, false, "Number of Approval Program pages"},
 	{ClearStateProgramPages, StackBytes, true, 7, 7, false, "ClearState Program as an array of pages"},
 	{NumClearStateProgramPages, StackUint64, false, 7, 0, false, "Number of ClearState Program pages"},
+
+	{RejectVersion, StackUint64, false, 12, 12, false, "Application version for which the txn must reject"},
 }
 
 // TxnFields contains info on the arguments to the txn* family of opcodes
@@ -626,9 +631,9 @@ var globalFieldSpecs = [...]globalFieldSpec{
 	{PayoutsPercent, StackUint64, modeAny, incentiveVersion,
 		"The percentage of transaction fees in a block that can be paid to the block proposer."},
 	{PayoutsMinBalance, StackUint64, modeAny, incentiveVersion,
-		"The minimum algo balance an account must have in the agreement round to receive block payouts in the proposal round."},
+		"The minimum balance an account must have in the agreement round to receive block payouts in the proposal round."},
 	{PayoutsMaxBalance, StackUint64, modeAny, incentiveVersion,
-		"The maximum algo balance an account can have in the agreement round to receive block payouts in the proposal round."},
+		"The maximum balance an account can have in the agreement round to receive block payouts in the proposal round."},
 }
 
 func globalFieldSpecByField(f GlobalField) (globalFieldSpec, bool) {
@@ -783,6 +788,68 @@ var EcGroups = FieldGroup{
 	"EC", "Groups",
 	ecGroupNames[:],
 	ecGroupSpecByName,
+}
+
+// MimcConfig is an enum for the `mimc` opcode
+type MimcConfig int
+
+const (
+	// BN254Mp110 is the default MiMC configuration for the BN254 curve with Miyaguchi-Preneel mode, 110 rounds, exponent 5, seed "seed"
+	BN254Mp110 MimcConfig = iota
+	// BLS12_381Mp111 is the default MiMC configuration for the BLS12-381 curve with Miyaguchi-Preneel mode, 111 rounds, exponent 5, seed "seed"
+	BLS12_381Mp111
+	invalidMimcConfig // compile-time constant for number of fields
+)
+
+var mimcConfigNames [invalidMimcConfig]string
+
+type mimcConfigSpec struct {
+	field MimcConfig
+	doc   string
+}
+
+func (fs mimcConfigSpec) Field() byte {
+	return byte(fs.field)
+}
+func (fs mimcConfigSpec) Type() StackType {
+	return StackNone // Will not show, since all are untyped
+}
+func (fs mimcConfigSpec) OpVersion() uint64 {
+	return mimcVersion
+}
+func (fs mimcConfigSpec) Version() uint64 {
+	return mimcVersion
+}
+func (fs mimcConfigSpec) Note() string {
+	return fs.doc
+}
+
+var mimcConfigSpecs = [...]mimcConfigSpec{
+	{BN254Mp110, "MiMC configuration for the BN254 curve with Miyaguchi-Preneel mode, 110 rounds, exponent 5, seed \"seed\""},
+	{BLS12_381Mp111, "MiMC configuration for the BLS12-381 curve with Miyaguchi-Preneel mode, 111 rounds, exponent 5, seed \"seed\""},
+}
+
+func mimcConfigSpecByField(c MimcConfig) (mimcConfigSpec, bool) {
+	if int(c) >= len(mimcConfigSpecs) {
+		return mimcConfigSpec{}, false
+	}
+	return mimcConfigSpecs[c], true
+}
+
+var mimcConfigSpecByName = make(mimcConfigNameSpecMap, len(mimcConfigNames))
+
+type mimcConfigNameSpecMap map[string]mimcConfigSpec
+
+func (s mimcConfigNameSpecMap) get(name string) (FieldSpec, bool) {
+	fs, ok := s[name]
+	return fs, ok
+}
+
+// MimcConfigs collects details about the constants used to describe MimcConfigs
+var MimcConfigs = FieldGroup{
+	"Mimc Configurations", "Parameters",
+	mimcConfigNames[:],
+	mimcConfigSpecByName,
 }
 
 // Base64Encoding is an enum for the `base64decode` opcode
@@ -1264,6 +1331,9 @@ const (
 	// AppAddress is also not *in* the Params, but can be derived
 	AppAddress
 
+	// AppVersion begins at 0 and increasing each time either program changes
+	AppVersion
+
 	invalidAppParamsField // compile-time constant for number of fields
 )
 
@@ -1302,6 +1372,7 @@ var appParamsFieldSpecs = [...]appParamsFieldSpec{
 	{AppExtraProgramPages, StackUint64, 5, "Number of Extra Program Pages of code space"},
 	{AppCreator, StackAddress, 5, "Creator address"},
 	{AppAddress, StackAddress, 5, "Address for which this application has authority"},
+	{AppVersion, StackUint64, 12, "Version of the app, incremented each time the approval or clear program changes"},
 }
 
 func appParamsFieldSpecByField(f AppParamsField) (appParamsFieldSpec, bool) {
@@ -1486,7 +1557,7 @@ func (fs voterParamsFieldSpec) Note() string {
 }
 
 var voterParamsFieldSpecs = [...]voterParamsFieldSpec{
-	{VoterBalance, StackUint64, 6, "Online stake in microalgos"},
+	{VoterBalance, StackUint64, incentiveVersion, "Online stake in microalgos"},
 	{VoterIncentiveEligible, StackBoolean, incentiveVersion, "Had this account opted into block payouts"},
 }
 
@@ -1546,6 +1617,13 @@ func init() {
 		equal(int(s.field), i)
 		ecGroupNames[s.field] = s.field.String()
 		ecGroupSpecByName[s.field.String()] = s
+	}
+
+	equal(len(mimcConfigSpecs), len(mimcConfigNames))
+	for i, s := range mimcConfigSpecs {
+		equal(int(s.field), i)
+		mimcConfigNames[s.field] = s.field.String()
+		mimcConfigSpecByName[s.field.String()] = s
 	}
 
 	equal(len(base64EncodingSpecs), len(base64EncodingNames))

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -39,12 +39,22 @@ import (
 var delegatesMoney = basics.MicroAlgos{Raw: 1000 * 1000 * 1000}
 
 var proto1 = protocol.ConsensusVersion("Test1")
+var proto1NoBonus = protocol.ConsensusVersion("Test1NoBonus")
 var proto2 = protocol.ConsensusVersion("Test2")
 var proto3 = protocol.ConsensusVersion("Test3")
 var protoUnsupported = protocol.ConsensusVersion("TestUnsupported")
 var protoDelay = protocol.ConsensusVersion("TestDelay")
 
 func init() {
+	verBeforeBonus := protocol.ConsensusV39
+	params1NB := config.Consensus[verBeforeBonus]
+	params1NB.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{
+		proto2: 0,
+	}
+	params1NB.MinUpgradeWaitRounds = 0
+	params1NB.MaxUpgradeWaitRounds = 0
+	config.Consensus[proto1NoBonus] = params1NB
+
 	params1 := config.Consensus[protocol.ConsensusCurrentVersion]
 	params1.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{
 		proto2: 0,
@@ -90,9 +100,9 @@ func TestUpgradeVote(t *testing.T) {
 	s = UpgradeState{
 		CurrentProtocol:        proto1,
 		NextProtocol:           proto2,
-		NextProtocolApprovals:  config.Consensus[protocol.ConsensusCurrentVersion].UpgradeThreshold - 1,
-		NextProtocolVoteBefore: basics.Round(20),
-		NextProtocolSwitchOn:   basics.Round(30),
+		NextProtocolApprovals:  basics.Round(config.Consensus[protocol.ConsensusCurrentVersion].UpgradeThreshold) - 1,
+		NextProtocolVoteBefore: 20,
+		NextProtocolSwitchOn:   30,
 	}
 
 	// Check that applyUpgradeVote rejects concurrent proposal
@@ -112,9 +122,9 @@ func TestUpgradeVote(t *testing.T) {
 	s1, err = s.applyUpgradeVote(basics.Round(20), UpgradeVote{})
 	require.NoError(t, err)
 	require.Equal(t, s1.NextProtocol, protocol.ConsensusVersion(""))
-	require.Equal(t, s1.NextProtocolApprovals, uint64(0))
-	require.Equal(t, s1.NextProtocolVoteBefore, basics.Round(0))
-	require.Equal(t, s1.NextProtocolSwitchOn, basics.Round(0))
+	require.Zero(t, s1.NextProtocolApprovals)
+	require.Zero(t, s1.NextProtocolVoteBefore)
+	require.Zero(t, s1.NextProtocolSwitchOn)
 
 	// Check that proposal gets approved with sufficient votes
 	s.NextProtocolApprovals++
@@ -127,9 +137,9 @@ func TestUpgradeVote(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, s1.CurrentProtocol, proto2)
 	require.Equal(t, s1.NextProtocol, protocol.ConsensusVersion(""))
-	require.Equal(t, s1.NextProtocolApprovals, uint64(0))
-	require.Equal(t, s1.NextProtocolVoteBefore, basics.Round(0))
-	require.Equal(t, s1.NextProtocolSwitchOn, basics.Round(0))
+	require.Zero(t, s1.NextProtocolApprovals)
+	require.Zero(t, s1.NextProtocolVoteBefore)
+	require.Zero(t, s1.NextProtocolSwitchOn)
 }
 
 func TestUpgradeVariableDelay(t *testing.T) {
@@ -263,7 +273,7 @@ func TestBonus(t *testing.T) {
 	t.Parallel()
 
 	var prev Block
-	prev.CurrentProtocol = proto1
+	prev.CurrentProtocol = proto1NoBonus
 	prev.BlockHeader.GenesisID = t.Name()
 	crypto.RandBytes(prev.BlockHeader.GenesisHash[:])
 
@@ -832,11 +842,26 @@ func TestNextRewardsRateWithFixNextRewardLevelOverflow(t *testing.T) {
 func TestBlock_ContentsMatchHeader(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
-	a := require.New(t)
+	for _, cv := range []struct {
+		name string
+		ver  protocol.ConsensusVersion
+	}{
+		{"v32", protocol.ConsensusV32},
+		{"v34", protocol.ConsensusV34},
+		{"current", protocol.ConsensusCurrentVersion},
+		{"future", protocol.ConsensusFuture},
+	} {
+		t.Run(cv.name, func(t *testing.T) {
+			testBlockContentsMatchHeader(t, cv.ver)
+		})
+	}
+}
 
+func testBlockContentsMatchHeader(t *testing.T, cv protocol.ConsensusVersion) {
+	a := require.New(t)
 	// Create a block without SHA256 TxnCommitments
 	var block Block
-	block.CurrentProtocol = protocol.ConsensusV32
+	block.CurrentProtocol = cv
 	crypto.RandBytes(block.BlockHeader.GenesisHash[:])
 
 	for i := 0; i < 1024; i++ {
@@ -870,51 +895,93 @@ func TestBlock_ContentsMatchHeader(t *testing.T) {
 	a.NoError(err)
 	rootSliceSHA256 := tree.Root()
 
+	tree, err = block.TxnMerkleTreeSHA512()
+	a.NoError(err)
+	rootSliceSHA512 := tree.Root()
+
 	badDigestSlice := []byte("(>^-^)>")
 
-	/* Test V32 */
+	// Get consensus parameters for this version
+	params, ok := config.Consensus[cv]
+	a.True(ok)
+
+	// Initially all roots empty, should fail
+	block.BlockHeader.TxnCommitments = TxnCommitments{}
 	a.False(block.ContentsMatchHeader())
 
+	// Copy the appropriate txn roots based on consensus version
 	copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
-	block.BlockHeader.TxnCommitments.Sha256Commitment = crypto.Digest{}
+	if params.EnableSHA256TxnCommitmentHeader {
+		copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
+	}
+	if params.EnableSha512BlockHash {
+		copy(block.BlockHeader.TxnCommitments.Sha512Commitment[:], rootSliceSHA512)
+	}
 	a.True(block.ContentsMatchHeader())
 
-	copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
-	a.False(block.ContentsMatchHeader())
+	// Test with SHA256 set when it shouldn't be
+	if !params.EnableSHA256TxnCommitmentHeader {
+		copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
+		a.False(block.ContentsMatchHeader())
+		block.BlockHeader.TxnCommitments.Sha256Commitment = crypto.Digest{}
+	}
 
+	// Test with SHA512 set when it shouldn't be
+	if !params.EnableSha512BlockHash {
+		copy(block.BlockHeader.TxnCommitments.Sha512Commitment[:], rootSliceSHA512)
+		a.False(block.ContentsMatchHeader())
+		block.BlockHeader.TxnCommitments.Sha512Commitment = crypto.Sha512Digest{}
+	}
+
+	// Test with bad NativeSha512_256Commitment (should fail for all protocols)
 	copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], badDigestSlice)
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
 	a.False(block.ContentsMatchHeader())
 
+	// Test with missing NativeSha512_256Commitment
 	block.BlockHeader.TxnCommitments.NativeSha512_256Commitment = crypto.Digest{}
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
+	if params.EnableSHA256TxnCommitmentHeader {
+		copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
+	}
+	if params.EnableSha512BlockHash {
+		copy(block.BlockHeader.TxnCommitments.Sha512Commitment[:], rootSliceSHA512)
+	}
 	a.False(block.ContentsMatchHeader())
 
-	/* Test Consensus Current */
-	// Create a block with SHA256 TxnCommitments
-	block.CurrentProtocol = protocol.ConsensusCurrentVersion
+	// For protocols with SHA256 enabled, test with bad/missing SHA256 commitment
+	if params.EnableSHA256TxnCommitmentHeader {
+		copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
+		copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], badDigestSlice)
+		if params.EnableSha512BlockHash {
+			copy(block.BlockHeader.TxnCommitments.Sha512Commitment[:], rootSliceSHA512)
+		}
+		a.False(block.ContentsMatchHeader())
 
-	block.BlockHeader.TxnCommitments.NativeSha512_256Commitment = crypto.Digest{}
-	block.BlockHeader.TxnCommitments.Sha256Commitment = crypto.Digest{}
-	a.False(block.ContentsMatchHeader())
+		// Test with missing SHA256 commitment
+		copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
+		block.BlockHeader.TxnCommitments.Sha256Commitment = crypto.Digest{}
+		if params.EnableSha512BlockHash {
+			copy(block.BlockHeader.TxnCommitments.Sha512Commitment[:], rootSliceSHA512)
+		}
+		a.False(block.ContentsMatchHeader())
+	}
 
-	// Now update the SHA256 header to its correct value
-	copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
-	a.True(block.ContentsMatchHeader())
+	// For protocols with SHA512 enabled, test with bad/missing SHA512 commitment
+	if params.EnableSha512BlockHash {
+		copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
+		if params.EnableSHA256TxnCommitmentHeader {
+			copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
+		}
+		copy(block.BlockHeader.TxnCommitments.Sha512Commitment[:], badDigestSlice)
+		a.False(block.ContentsMatchHeader())
 
-	copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], badDigestSlice)
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
-	a.False(block.ContentsMatchHeader())
-
-	copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], badDigestSlice)
-	a.False(block.ContentsMatchHeader())
-
-	block.BlockHeader.TxnCommitments.NativeSha512_256Commitment = crypto.Digest{}
-	copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
-	a.False(block.ContentsMatchHeader())
+		// Test with missing SHA512 commitment
+		copy(block.BlockHeader.TxnCommitments.NativeSha512_256Commitment[:], rootSliceSHA512_256)
+		if params.EnableSHA256TxnCommitmentHeader {
+			copy(block.BlockHeader.TxnCommitments.Sha256Commitment[:], rootSliceSHA256)
+		}
+		block.BlockHeader.TxnCommitments.Sha512Commitment = crypto.Sha512Digest{}
+		a.False(block.ContentsMatchHeader())
+	}
 }
 
 func TestBlockHeader_Serialization(t *testing.T) {
@@ -933,6 +1000,54 @@ func TestBlockHeader_Serialization(t *testing.T) {
 
 	a.Equal(crypto.Digest{}, blkHdr.TxnCommitments.Sha256Commitment)
 	a.NotEqual(crypto.Digest{}, blkHdr.TxnCommitments.NativeSha512_256Commitment)
+	a.Equal(crypto.Sha512Digest{}, blkHdr.TxnCommitments.Sha512Commitment)
+	a.Equal(crypto.Sha512Digest{}, blkHdr.Branch512)
+}
+
+// TestBlockHeader_PreCheck_Branch512 tests the Branch512 validation in PreCheck
+func TestBlockHeader_PreCheck_Branch512(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+	a := require.New(t)
+
+	// Test consensus v40 (no EnableSha512BlockHash)
+	cv := protocol.ConsensusV40
+	prevHeader := BlockHeader{Round: 1, GenesisID: "test"}
+	prevHeader.CurrentProtocol = cv
+	crypto.RandBytes(prevHeader.GenesisHash[:])
+	// Make round 2 block that references block 1 as prev
+	currentHeader := BlockHeader{
+		Round: prevHeader.Round + 1, GenesisID: prevHeader.GenesisID, GenesisHash: prevHeader.GenesisHash,
+		Branch: prevHeader.Hash(),
+	}
+	currentHeader.CurrentProtocol = cv
+	// empty Branch512 passes
+	a.NoError(currentHeader.PreCheck(prevHeader))
+	// correct Branch512 fails
+	currentHeader.Branch512 = prevHeader.Hash512()
+	a.ErrorContains(currentHeader.PreCheck(prevHeader), "block branch512 not allowed")
+	// non-empty Branch512 fails
+	crypto.RandBytes(currentHeader.Branch512[:])
+	a.ErrorContains(currentHeader.PreCheck(prevHeader), "block branch512 not allowed")
+
+	// Test consensus future (EnableSha512BlockHash set)
+	cv = protocol.ConsensusFuture
+	prevHeader = BlockHeader{Round: 1, GenesisID: "test"}
+	prevHeader.CurrentProtocol = cv
+	crypto.RandBytes(prevHeader.GenesisHash[:])
+	currentHeader = BlockHeader{
+		Round: prevHeader.Round + 1, GenesisID: prevHeader.GenesisID, GenesisHash: prevHeader.GenesisHash,
+		Branch: prevHeader.Hash(),
+	}
+	currentHeader.CurrentProtocol = cv
+	// empty Branch512 fails
+	a.ErrorContains(currentHeader.PreCheck(prevHeader), "block branch512 incorrect")
+	// correct Branch512 passes
+	currentHeader.Branch512 = prevHeader.Hash512()
+	a.NoError(currentHeader.PreCheck(prevHeader))
+	// incorrect Branch512 fails
+	crypto.RandBytes(currentHeader.Branch512[:])
+	a.ErrorContains(currentHeader.PreCheck(prevHeader), "block branch512 incorrect")
 }
 
 func TestBonusUpgrades(t *testing.T) {
@@ -1013,11 +1128,11 @@ func TestFirstYearsBonus(t *testing.T) {
 	fmt.Printf("paid %d algos\n", suma)
 	fmt.Printf("bonus start: %d end: %d\n", plan.BaseAmount, bonus)
 
-	// pays about 88M algos
-	a.InDelta(88_500_000, suma, 100_000)
+	// pays about 103.5M algos
+	a.InDelta(103_500_000, suma, 100_000)
 
-	// decline about 35%
-	a.InDelta(0.65, float64(bonus)/float64(plan.BaseAmount), 0.01)
+	// decline about 10%
+	a.InDelta(0.90, float64(bonus)/float64(plan.BaseAmount), 0.01)
 
 	// year 2
 	for i := 0; i < yearRounds; i++ {
@@ -1033,11 +1148,11 @@ func TestFirstYearsBonus(t *testing.T) {
 	fmt.Printf("paid %d algos after 2 years\n", sum2)
 	fmt.Printf("bonus end: %d\n", bonus)
 
-	// pays about 146M algos (total for 2 years)
-	a.InDelta(145_700_000, sum2, 100_000)
+	// pays about 196M algos (total for 2 years)
+	a.InDelta(196_300_000, sum2, 100_000)
 
-	// decline about 58%
-	a.InDelta(0.42, float64(bonus)/float64(plan.BaseAmount), 0.01)
+	// decline to about 81%
+	a.InDelta(0.81, float64(bonus)/float64(plan.BaseAmount), 0.01)
 
 	// year 3
 	for i := 0; i < yearRounds; i++ {
@@ -1053,9 +1168,51 @@ func TestFirstYearsBonus(t *testing.T) {
 	fmt.Printf("paid %d algos after 3 years\n", sum3)
 	fmt.Printf("bonus end: %d\n", bonus)
 
-	// pays about 182M algos (total for 3 years)
-	a.InDelta(182_600_000, sum3, 100_000)
+	// pays about 279M algos (total for 3 years)
+	a.InDelta(279_500_000, sum3, 100_000)
 
-	// declined to about 27% (but foundation funding probably gone anyway)
-	a.InDelta(0.27, float64(bonus)/float64(plan.BaseAmount), 0.01)
+	// declined to about 72% (but foundation funding probably gone anyway)
+	a.InDelta(0.72, float64(bonus)/float64(plan.BaseAmount), 0.01)
+}
+
+func TestAlive(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	bh := BlockHeader{
+		Round:       0,
+		GenesisHash: crypto.Digest{0x42},
+	}
+	bh.CurrentProtocol = protocol.ConsensusCurrentVersion
+
+	header := transactions.Header{
+		FirstValid:  5000,
+		LastValid:   5050,
+		GenesisID:   bh.GenesisID,
+		GenesisHash: bh.GenesisHash,
+	}
+
+	bh.Round = header.FirstValid + 1
+	if err := bh.Alive(header); err != nil {
+		t.Errorf("transaction not alive during lifetime %v", err)
+	}
+
+	bh.Round = header.FirstValid
+	if err := bh.Alive(header); err != nil {
+		t.Errorf("transaction not alive at issuance %v", err)
+	}
+
+	bh.Round = header.LastValid
+	if err := bh.Alive(header); err != nil {
+		t.Errorf("transaction not alive at expiry %v", err)
+	}
+
+	bh.Round = header.FirstValid - 1
+	if bh.Alive(header) == nil {
+		t.Errorf("premature transaction alive %v", header)
+	}
+
+	bh.Round = header.LastValid + 1
+	if bh.Alive(header) == nil {
+		t.Errorf("expired transaction alive %v", header)
+	}
 }

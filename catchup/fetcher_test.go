@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -109,15 +109,15 @@ func buildTestLedger(t *testing.T, blk bookkeeping.Block) (ledger *data.Ledger, 
 	return
 }
 
-func addBlocks(t *testing.T, ledger *data.Ledger, blk bookkeeping.Block, numBlocks int) {
-	var err error
-	for i := 0; i < numBlocks; i++ {
+func addBlocks(t *testing.T, ledger *data.Ledger, blk bookkeeping.Block, numBlocks basics.Round) {
+	for range numBlocks {
+		var err error
 		blk.BlockHeader.Round++
 		blk.BlockHeader.TimeStamp += int64(crypto.RandUint64() % 100 * 1000)
 		blk.TxnCommitments, err = blk.PaysetCommit()
 		require.NoError(t, err)
 
-		err := ledger.AddBlock(blk, agreement.Certificate{Round: blk.BlockHeader.Round})
+		err = ledger.AddBlock(blk, agreement.Certificate{Round: blk.BlockHeader.Round})
 		require.NoError(t, err)
 
 		hdr, err := ledger.BlockHdr(blk.BlockHeader.Round)
@@ -251,6 +251,10 @@ func (p *testUnicastPeer) GetAddress() string {
 
 func (p *testUnicastPeer) GetNetwork() network.GossipNode { return p.gn }
 
+func (p *testUnicastPeer) RoutingAddr() []byte {
+	panic("not implemented")
+}
+
 func (p *testUnicastPeer) Request(ctx context.Context, tag protocol.Tag, topics network.Topics) (resp *network.Response, e error) {
 
 	responseChannel := make(chan *network.Response, 1)
@@ -283,9 +287,8 @@ func (p *testUnicastPeer) Request(ctx context.Context, tag protocol.Tag, topics 
 func (p *testUnicastPeer) Respond(ctx context.Context, reqMsg network.IncomingMessage, outMsg network.OutgoingMessage) (e error) {
 
 	hashKey := uint64(0)
-	channel, found := p.responseChannels[hashKey]
-	if !found {
-	}
+	require.Contains(p.t, p.responseChannels, hashKey)
+	channel := p.responseChannels[hashKey]
 
 	select {
 	case channel <- &network.Response{Topics: outMsg.Topics}:

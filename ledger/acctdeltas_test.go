@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -36,6 +36,7 @@ import (
 
 	"github.com/algorand/avm-abi/apps"
 	"github.com/algorand/go-algorand/config"
+	"github.com/algorand/go-algorand/config/bounds"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/crypto/merklesignature"
 	"github.com/algorand/go-algorand/data/basics"
@@ -129,7 +130,7 @@ func checkAccounts(t *testing.T, tx trackerdb.TransactionScope, rnd basics.Round
 	})
 
 	for i := 0; i < len(onlineAccounts); i++ {
-		dbtop, err := ar.AccountsOnlineTop(rnd, 0, uint64(i), proto)
+		dbtop, err := ar.AccountsOnlineTop(rnd, 0, uint64(i), proto.RewardUnit)
 		require.NoError(t, err)
 		require.Equal(t, i, len(dbtop))
 
@@ -139,7 +140,7 @@ func checkAccounts(t *testing.T, tx trackerdb.TransactionScope, rnd basics.Round
 		}
 	}
 
-	top, err := ar.AccountsOnlineTop(rnd, 0, uint64(len(onlineAccounts)+1), proto)
+	top, err := ar.AccountsOnlineTop(rnd, 0, uint64(len(onlineAccounts)+1), proto.RewardUnit)
 	require.NoError(t, err)
 	require.Equal(t, len(top), len(onlineAccounts))
 }
@@ -159,7 +160,7 @@ func TestAccountDBInit(t *testing.T) {
 
 		checkAccounts(t, tx, 0, accts)
 
-		newDB, err = tx.Testing().AccountsInitLightTest(t, accts, proto)
+		newDB, err = tx.Testing().AccountsInitLightTest(t, accts, proto.RewardUnit)
 		require.NoError(t, err)
 		require.False(t, newDB)
 		checkAccounts(t, tx, 0, accts)
@@ -716,7 +717,7 @@ func benchmarkWriteCatchpointStagingBalancesSub(b *testing.B, ascendingOrder boo
 			last64KSize = chunkSize
 			last64KAccountCreationTime = time.Duration(0)
 		}
-		var chunk catchpointFileChunkV6
+		var chunk CatchpointSnapshotChunkV6
 		chunk.Balances = make([]encoded.BalanceRecordV6, chunkSize)
 		for i := uint64(0); i < chunkSize; i++ {
 			var randomAccount encoded.BalanceRecordV6
@@ -2055,7 +2056,7 @@ func initBoxDatabase(b *testing.B, totalBoxes, boxSize int) (db.Pair, func(), er
 		batchCount = 1
 	}
 
-	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+	rewardUnit := config.Consensus[protocol.ConsensusCurrentVersion].RewardUnit
 	dbs, _ := storetesting.DbOpenTest(b, false)
 	cleanup := func() {
 		dbs.Close()
@@ -2063,7 +2064,7 @@ func initBoxDatabase(b *testing.B, totalBoxes, boxSize int) (db.Pair, func(), er
 
 	tx, err := dbs.Wdb.Handle.Begin()
 	require.NoError(b, err)
-	_, err = sqlitedriver.AccountsInitLightTest(b, tx, make(map[basics.Address]basics.AccountData), proto)
+	_, err = sqlitedriver.AccountsInitLightTest(b, tx, nil, rewardUnit)
 	require.NoError(b, err)
 	err = tx.Commit()
 	require.NoError(b, err)
@@ -2334,7 +2335,7 @@ func TestAccountOnlineQueries(t *testing.T) {
 
 		// check round 1
 		rnd := basics.Round(1)
-		online, err := ar.AccountsOnlineTop(rnd, 0, 10, proto)
+		online, err := ar.AccountsOnlineTop(rnd, 0, 10, proto.RewardUnit)
 		require.NoError(t, err)
 		require.Equal(t, 2, len(online))
 		require.NotContains(t, online, addrC)
@@ -2373,7 +2374,7 @@ func TestAccountOnlineQueries(t *testing.T) {
 
 		// check round 2
 		rnd = basics.Round(2)
-		online, err = ar.AccountsOnlineTop(rnd, 0, 10, proto)
+		online, err = ar.AccountsOnlineTop(rnd, 0, 10, proto.RewardUnit)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(online))
 		require.NotContains(t, online, addrA)
@@ -2406,7 +2407,7 @@ func TestAccountOnlineQueries(t *testing.T) {
 
 		// check round 3
 		rnd = basics.Round(3)
-		online, err = ar.AccountsOnlineTop(rnd, 0, 10, proto)
+		online, err = ar.AccountsOnlineTop(rnd, 0, 10, proto.RewardUnit)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(online))
 		require.NotContains(t, online, addrA)
@@ -2750,6 +2751,27 @@ func TestAccountOnlineRoundParams(t *testing.T) {
 	require.Equal(t, onlineRoundParams, dbOnlineRoundParams[1:])
 	require.Equal(t, maxRounds, int(endRound))
 
+	// Use MakeOnlineRoundParamsIter to dump all data, starting from 10
+	iter, err := sqlitedriver.MakeOnlineRoundParamsIter(context.Background(), tx, false, 10)
+	require.NoError(t, err)
+	defer iter.Close()
+	var roundParamsIterData []ledgercore.OnlineRoundParamsData
+	var roundParamsIterLastRound basics.Round
+	for iter.Next() {
+		item, err := iter.GetItem()
+		require.NoError(t, err)
+
+		var orpData ledgercore.OnlineRoundParamsData
+		err = protocol.Decode(item.Data, &orpData)
+		require.NoError(t, err)
+		roundParamsIterLastRound = item.Round
+
+		roundParamsIterData = append(roundParamsIterData, orpData)
+	}
+	require.Equal(t, onlineRoundParams[9:], roundParamsIterData)
+	require.Equal(t, maxRounds, int(roundParamsIterLastRound))
+
+	// Prune online round params to rnd 10
 	err = arw.AccountsPruneOnlineRoundParams(10)
 	require.NoError(t, err)
 
@@ -2772,6 +2794,15 @@ func TestAccountOnlineRoundParams(t *testing.T) {
 func TestOnlineAccountsDeletion(t *testing.T) {
 	partitiontest.PartitionTest(t)
 
+	t.Run("delete", func(t *testing.T) {
+		runTestOnlineAccountsDeletion(t, testOnlineAccountsDeletion)
+	})
+	t.Run("excludeBefore", func(t *testing.T) {
+		runTestOnlineAccountsDeletion(t, testOnlineAccountsExcludeBefore)
+	})
+}
+
+func runTestOnlineAccountsDeletion(t *testing.T, assertFunc func(*testing.T, basics.Address, basics.Address, *sql.Tx)) {
 	dbs, _ := storetesting.DbOpenTest(t, true)
 	storetesting.SetDbLogging(t, dbs)
 	defer dbs.Close()
@@ -2782,8 +2813,6 @@ func TestOnlineAccountsDeletion(t *testing.T) {
 
 	var accts map[basics.Address]basics.AccountData
 	sqlitedriver.AccountsInitTest(t, tx, accts, protocol.ConsensusCurrentVersion)
-
-	arw := sqlitedriver.NewAccountsSQLReaderWriter(tx)
 
 	updates := compactOnlineAccountDeltas{}
 	addrA := ledgertesting.RandomAddress()
@@ -2837,6 +2866,12 @@ func TestOnlineAccountsDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, updated, 5)
 
+	assertFunc(t, addrA, addrB, tx)
+}
+
+func testOnlineAccountsDeletion(t *testing.T, addrA, addrB basics.Address, tx *sql.Tx) {
+	arw := sqlitedriver.NewAccountsSQLReaderWriter(tx)
+
 	queries, err := sqlitedriver.OnlineAccountsInitDbQueries(tx)
 	require.NoError(t, err)
 
@@ -2853,11 +2888,11 @@ func TestOnlineAccountsDeletion(t *testing.T) {
 
 		history, validThrough, err = queries.LookupOnlineHistory(addrA)
 		require.NoError(t, err)
-		require.Equal(t, basics.Round(0), validThrough) // not set
+		require.Zero(t, validThrough) // not set
 		require.Len(t, history, 3)
 		history, validThrough, err = queries.LookupOnlineHistory(addrB)
 		require.NoError(t, err)
-		require.Equal(t, basics.Round(0), validThrough)
+		require.Zero(t, validThrough)
 		require.Len(t, history, 2)
 	}
 
@@ -2871,11 +2906,11 @@ func TestOnlineAccountsDeletion(t *testing.T) {
 
 		history, validThrough, err = queries.LookupOnlineHistory(addrA)
 		require.NoError(t, err)
-		require.Equal(t, basics.Round(0), validThrough)
+		require.Zero(t, validThrough)
 		require.Len(t, history, 1)
 		history, validThrough, err = queries.LookupOnlineHistory(addrB)
 		require.NoError(t, err)
-		require.Equal(t, basics.Round(0), validThrough)
+		require.Zero(t, validThrough)
 		require.Len(t, history, 2)
 	}
 
@@ -2889,11 +2924,67 @@ func TestOnlineAccountsDeletion(t *testing.T) {
 
 		history, validThrough, err = queries.LookupOnlineHistory(addrA)
 		require.NoError(t, err)
-		require.Equal(t, basics.Round(0), validThrough)
+		require.Zero(t, validThrough)
 		require.Len(t, history, 1)
 		history, validThrough, err = queries.LookupOnlineHistory(addrB)
 		require.NoError(t, err)
-		require.Equal(t, basics.Round(0), validThrough)
+		require.Zero(t, validThrough)
+		require.Len(t, history, 1)
+	}
+}
+
+// same assertions as testOnlineAccountsDeletion but with excludeBefore
+func testOnlineAccountsExcludeBefore(t *testing.T, addrA, addrB basics.Address, tx *sql.Tx) {
+	// Use MakeOnlineAccountsIter to dump all data, starting from rnd
+	getAcctDataForRound := func(rnd basics.Round, expectedCount int64) map[basics.Address][]*encoded.OnlineAccountRecordV6 {
+		it, err := sqlitedriver.MakeOrderedOnlineAccountsIter(context.Background(), tx, false, rnd)
+		require.NoError(t, err)
+
+		var count int64
+		ret := make(map[basics.Address][]*encoded.OnlineAccountRecordV6)
+		for it.Next() {
+			acct, err := it.GetItem()
+			require.NoError(t, err)
+			ret[acct.Address] = append(ret[acct.Address], acct)
+			count++
+		}
+		require.Equal(t, expectedCount, count)
+		return ret
+	}
+
+	for _, rnd := range []basics.Round{1, 2, 3} {
+		vals := getAcctDataForRound(rnd, 5)
+
+		history, ok := vals[addrA]
+		require.True(t, ok)
+		require.Len(t, history, 3)
+
+		history, ok = vals[addrB]
+		require.True(t, ok)
+		require.Len(t, history, 2)
+	}
+
+	for _, rnd := range []basics.Round{4, 5, 6, 7} {
+		vals := getAcctDataForRound(rnd, 3)
+
+		history, ok := vals[addrA]
+		require.True(t, ok)
+		require.Len(t, history, 1)
+
+		history, ok = vals[addrB]
+		require.True(t, ok)
+		require.Len(t, history, 2)
+	}
+
+	for _, rnd := range []basics.Round{8, 9} {
+		vals := getAcctDataForRound(rnd, 2)
+
+		history, ok := vals[addrA]
+		require.True(t, ok)
+		require.Len(t, history, 1)
+
+		history, ok = vals[addrB]
+		require.True(t, ok)
 		require.Len(t, history, 1)
 	}
 }
@@ -3296,15 +3387,16 @@ func randomAppResourceData() trackerdb.ResourcesData {
 		GlobalStateSchemaNumUint:      crypto.RandUint64(),
 		GlobalStateSchemaNumByteSlice: crypto.RandUint64(),
 		ExtraProgramPages:             uint32(crypto.RandUint63() % uint64(math.MaxUint32)),
+		Version:                       crypto.RandUint64(),
 
 		ResourceFlags: 255,
 		UpdateRound:   crypto.RandUint64(),
 	}
 
 	// MaxAvailableAppProgramLen is conbined size of approval and clear state since it is bound by proto.MaxAppTotalProgramLen
-	rdApp.ApprovalProgram = make([]byte, config.MaxAvailableAppProgramLen/2)
+	rdApp.ApprovalProgram = make([]byte, bounds.MaxAvailableAppProgramLen/2)
 	crypto.RandBytes(rdApp.ApprovalProgram)
-	rdApp.ClearStateProgram = make([]byte, config.MaxAvailableAppProgramLen/2)
+	rdApp.ClearStateProgram = make([]byte, bounds.MaxAvailableAppProgramLen/2)
 	crypto.RandBytes(rdApp.ClearStateProgram)
 
 	maxGlobalState := make(basics.TealKeyValue, currentConsensusParams.MaxGlobalSchemaEntries)
@@ -3351,4 +3443,247 @@ func TestEncodedBaseResourceSize(t *testing.T) {
 
 	require.Less(t, len(encodedAsset), len(encodedApp))
 	require.GreaterOrEqual(t, MaxEncodedBaseResourceDataSize, len(encodedApp))
+}
+
+// TestOnlineAccountsExceedOfflineRows checks for extra rows for offline accounts in online accounts table:
+// 1. Account is online
+// 2. Account goes offline and recorded in baseOnlineAccounts cache
+// 3. Many (>320 normally) rounds later, account gets deleted by prunning
+// 4. Account updated with a transfer
+// 5. Since it is still in baseOnlineAccounts, it fetched as offline and a new offline row is inserted
+// ==> 5 <== could lead to a ghost row in online accounts table that:
+//   - are not needed but still correct
+//   - make catchpoint generation inconsistent across nodes since it content depends on dynamic baseOnlineAccounts cache.
+//
+// 6. A similar behavior is exposed when there are multiple offline updates in a batch with the same result
+// of extra unnesesary rows in the online accounts table.
+func TestOnlineAccountsExceedOfflineRows(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	dbs, _ := storetesting.DbOpenTest(t, true)
+	storetesting.SetDbLogging(t, dbs)
+	defer dbs.Close()
+
+	tx, err := dbs.Wdb.Handle.Begin()
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+
+	var accts map[basics.Address]basics.AccountData
+	sqlitedriver.AccountsInitTest(t, tx, accts, protocol.ConsensusCurrentVersion)
+
+	addrA := ledgertesting.RandomAddress()
+
+	// acct A is new, offline and then online => exercise new entry for account
+	deltaA := onlineAccountDelta{
+		address: addrA,
+		newAcct: []trackerdb.BaseOnlineAccountData{
+			{
+				MicroAlgos:     basics.MicroAlgos{Raw: 100_000_000},
+				BaseVotingData: trackerdb.BaseVotingData{VoteFirstValid: 1, VoteLastValid: 5},
+			},
+			{
+				MicroAlgos: basics.MicroAlgos{Raw: 100_000_000},
+			},
+		},
+		updRound:  []uint64{1, 2},
+		newStatus: []basics.Status{basics.Online, basics.Offline},
+	}
+	updates := compactOnlineAccountDeltas{}
+	updates.deltas = append(updates.deltas, deltaA)
+	writer, err := sqlitedriver.MakeOnlineAccountsSQLWriter(tx, updates.len() > 0)
+	require.NoError(t, err)
+	defer writer.Close()
+
+	lastUpdateRound := basics.Round(2)
+	updated, err := onlineAccountsNewRoundImpl(writer, updates, proto, lastUpdateRound)
+	require.NoError(t, err)
+	require.Len(t, updated, 2)
+
+	var baseOnlineAccounts lruOnlineAccounts
+	baseOnlineAccounts.init(logging.TestingLog(t), 1000, 800)
+	for _, persistedAcct := range updated {
+		baseOnlineAccounts.write(persistedAcct)
+	}
+
+	// make sure baseOnlineAccounts has the entry
+	entry, has := baseOnlineAccounts.read(addrA)
+	require.True(t, has)
+	require.True(t, entry.AccountData.IsVotingEmpty())
+	require.Equal(t, basics.Round(2), entry.UpdRound)
+
+	queries, err := sqlitedriver.OnlineAccountsInitDbQueries(tx)
+	require.NoError(t, err)
+
+	// make sure both rows are in the db
+	history, _, err := queries.LookupOnlineHistory(addrA)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+	// ASC ordered by updRound
+	require.False(t, history[0].AccountData.IsVotingEmpty())
+	require.Equal(t, basics.Round(1), history[0].UpdRound)
+	require.True(t, history[1].AccountData.IsVotingEmpty())
+	require.Equal(t, basics.Round(2), history[1].UpdRound)
+
+	// test case 1
+	// simulate compact online delta construction with baseOnlineAccounts use
+	acctDelta := ledgercore.AccountDeltas{}
+	ad := ledgercore.AccountData{
+		AccountBaseData: ledgercore.AccountBaseData{
+			Status:     basics.Offline,
+			MicroAlgos: basics.MicroAlgos{Raw: 100_000_000 - 1},
+		},
+	}
+	acctDelta.Upsert(addrA, ad)
+	deltas := []ledgercore.AccountDeltas{acctDelta}
+	updates = makeCompactOnlineAccountDeltas(deltas, 3, baseOnlineAccounts)
+
+	// make sure old is filled from baseOnlineAccounts
+	require.Empty(t, updates.misses)
+	require.Len(t, updates.deltas, 1)
+	require.NotEmpty(t, updates.deltas[0].oldAcct)
+	require.True(t, updates.deltas[0].oldAcct.AccountData.IsVotingEmpty())
+	require.Equal(t, 1, updates.deltas[0].nOnlineAcctDeltas)
+	require.Equal(t, basics.Offline, updates.deltas[0].newStatus[0])
+	require.True(t, updates.deltas[0].newAcct[0].IsVotingEmpty())
+
+	// insert and make sure no new rows are inserted
+	lastUpdateRound = basics.Round(3)
+	updated, err = onlineAccountsNewRoundImpl(writer, updates, proto, lastUpdateRound)
+	require.NoError(t, err)
+	require.Len(t, updated, 0)
+
+	history, _, err = queries.LookupOnlineHistory(addrA)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+
+	// test case 2
+	// multiple offline entries in a single batch
+
+	addrB := ledgertesting.RandomAddress()
+
+	// acct A is new, offline and then online => exercise new entry for account
+	deltaB := onlineAccountDelta{
+		address: addrB,
+		newAcct: []trackerdb.BaseOnlineAccountData{
+			{
+				MicroAlgos:     basics.MicroAlgos{Raw: 100_000_000},
+				BaseVotingData: trackerdb.BaseVotingData{VoteFirstValid: 1, VoteLastValid: 5},
+			},
+			{
+				MicroAlgos: basics.MicroAlgos{Raw: 100_000_000},
+			},
+			{
+				MicroAlgos: basics.MicroAlgos{Raw: 100_000_000 - 1},
+			},
+		},
+		updRound:  []uint64{4, 5, 6},
+		newStatus: []basics.Status{basics.Online, basics.Offline, basics.Offline},
+	}
+	updates = compactOnlineAccountDeltas{}
+	updates.deltas = append(updates.deltas, deltaB)
+
+	lastUpdateRound = basics.Round(4)
+	updated, err = onlineAccountsNewRoundImpl(writer, updates, proto, lastUpdateRound)
+	require.NoError(t, err)
+	require.Len(t, updated, 2) // 3rd update is ignored
+
+	// make sure the last offline entry is ignored
+	history, _, err = queries.LookupOnlineHistory(addrB)
+	require.NoError(t, err)
+	require.Len(t, history, 2)
+
+	// ASC ordered by updRound
+	require.False(t, history[0].AccountData.IsVotingEmpty())
+	require.Equal(t, basics.Round(4), history[0].UpdRound)
+	require.True(t, history[1].AccountData.IsVotingEmpty())
+	require.Equal(t, basics.Round(5), history[1].UpdRound)
+}
+
+// TestOnlineAccountsSuspended checks that transfer to suspended account does not produce extra rows
+// in online accounts table. The test is similar to TestOnlineAccountsExceedOfflineRows.
+func TestOnlineAccountsSuspended(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	dbs, _ := storetesting.DbOpenTest(t, true)
+	storetesting.SetDbLogging(t, dbs)
+	defer dbs.Close()
+
+	tx, err := dbs.Wdb.Handle.Begin()
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	proto := config.Consensus[protocol.ConsensusCurrentVersion]
+
+	var accts map[basics.Address]basics.AccountData
+	sqlitedriver.AccountsInitTest(t, tx, accts, protocol.ConsensusCurrentVersion)
+
+	addrA := ledgertesting.RandomAddress()
+
+	deltaA := onlineAccountDelta{
+		address: addrA,
+		newAcct: []trackerdb.BaseOnlineAccountData{
+			{
+				MicroAlgos:        basics.MicroAlgos{Raw: 100_000_000},
+				IncentiveEligible: true, // does not matter for commit logic but makes the test intent clearer
+				BaseVotingData:    trackerdb.BaseVotingData{VoteFirstValid: 1, VoteLastValid: 5},
+			},
+			// suspend, offline but non-empty voting data
+			{
+				MicroAlgos:        basics.MicroAlgos{Raw: 100_000_000},
+				IncentiveEligible: false,
+				BaseVotingData:    trackerdb.BaseVotingData{VoteFirstValid: 1, VoteLastValid: 5},
+			},
+		},
+		updRound:  []uint64{1, 2},
+		newStatus: []basics.Status{basics.Online, basics.Offline},
+	}
+	updates := compactOnlineAccountDeltas{}
+	updates.deltas = append(updates.deltas, deltaA)
+	writer, err := sqlitedriver.MakeOnlineAccountsSQLWriter(tx, updates.len() > 0)
+	require.NoError(t, err)
+	defer writer.Close()
+
+	lastUpdateRound := basics.Round(2)
+	updated, err := onlineAccountsNewRoundImpl(writer, updates, proto, lastUpdateRound)
+	require.NoError(t, err)
+	require.Len(t, updated, 2)
+
+	var baseOnlineAccounts lruOnlineAccounts
+	baseOnlineAccounts.init(logging.TestingLog(t), 1000, 800)
+	for _, persistedAcct := range updated {
+		baseOnlineAccounts.write(persistedAcct)
+	}
+
+	// make sure baseOnlineAccounts has the entry
+	entry, has := baseOnlineAccounts.read(addrA)
+	require.True(t, has)
+	require.True(t, entry.AccountData.IsVotingEmpty())
+	require.Equal(t, basics.Round(2), entry.UpdRound)
+
+	acctDelta := ledgercore.AccountDeltas{}
+
+	// simulate transfer to suspended account
+	ad := ledgercore.AccountData{
+		AccountBaseData: ledgercore.AccountBaseData{
+			Status:     basics.Offline,
+			MicroAlgos: basics.MicroAlgos{Raw: 100_000_000 - 1},
+		},
+		VotingData: basics.VotingData{
+			VoteFirstValid: 1,
+			VoteLastValid:  5,
+		},
+	}
+	acctDelta.Upsert(addrA, ad)
+	deltas := []ledgercore.AccountDeltas{acctDelta}
+	updates = makeCompactOnlineAccountDeltas(deltas, 3, baseOnlineAccounts)
+
+	// insert and make sure no new rows are inserted
+	lastUpdateRound = basics.Round(3)
+	updated, err = onlineAccountsNewRoundImpl(writer, updates, proto, lastUpdateRound)
+	require.NoError(t, err)
+	require.Len(t, updated, 0)
 }

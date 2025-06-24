@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -33,6 +33,17 @@ type DisconnectablePeer interface {
 	GetNetwork() GossipNode
 }
 
+// DisconnectableAddressablePeer is a Peer with a long-living connection to a network that can be disconnected and has an IP address
+type DisconnectableAddressablePeer interface {
+	DisconnectablePeer
+	IPAddressable
+}
+
+// IPAddressable is addressable with either IPv4 or IPv6 address
+type IPAddressable interface {
+	RoutingAddr() []byte
+}
+
 // PeerOption allows users to specify a subset of peers to query
 //
 //msgp:ignore PeerOption
@@ -48,6 +59,21 @@ const (
 	// PeersPhonebookArchivalNodes specifies all archival nodes (relay or p2p)
 	PeersPhonebookArchivalNodes PeerOption = iota
 )
+
+func (po PeerOption) String() string {
+	switch po {
+	case PeersConnectedOut:
+		return "ConnectedOut"
+	case PeersConnectedIn:
+		return "ConnectedIn"
+	case PeersPhonebookRelays:
+		return "PhonebookRelays"
+	case PeersPhonebookArchivalNodes:
+		return "PhonebookArchivalNodes"
+	default:
+		return "Unknown PeerOption"
+	}
+}
 
 // GossipNode represents a node in the gossip network
 type GossipNode interface {
@@ -118,7 +144,7 @@ var outgoingMessagesBufferSize = int(
 
 // IncomingMessage represents a message arriving from some peer in our p2p network
 type IncomingMessage struct {
-	Sender DisconnectablePeer
+	Sender DisconnectableAddressablePeer
 	Tag    Tag
 	Data   []byte
 	Err    error
@@ -137,11 +163,9 @@ type IncomingMessage struct {
 // Tag is a short string (2 bytes) marking a type of message
 type Tag = protocol.Tag
 
-func highPriorityTag(tags []protocol.Tag) bool {
-	for _, tag := range tags {
-		if tag == protocol.AgreementVoteTag || tag == protocol.ProposalPayloadTag {
-			return true
-		}
+func highPriorityTag(tag protocol.Tag) bool {
+	if tag == protocol.AgreementVoteTag || tag == protocol.ProposalPayloadTag {
+		return true
 	}
 	return false
 }

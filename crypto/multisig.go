@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -316,9 +316,8 @@ func MultisigAdd(unisig []MultisigSig, msig *MultisigSig) (err error) {
 					// invalid duplicates
 					err = errInvalidDuplicates
 					return
-				} else {
-					// valid duplicates
 				}
+				// valid duplicates
 			}
 		}
 	}

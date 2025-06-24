@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/data/basics"
 )
 
@@ -108,7 +109,7 @@ type ApplicationCallTxnFields struct {
 
 	// ApplicationArgs are arguments accessible to the executing
 	// ApprovalProgram or ClearStateProgram.
-	ApplicationArgs [][]byte `codec:"apaa,allocbound=encodedMaxApplicationArgs,maxtotalbytes=config.MaxAppTotalArgLen"`
+	ApplicationArgs [][]byte `codec:"apaa,allocbound=encodedMaxApplicationArgs,maxtotalbytes=bounds.MaxAppTotalArgLen"`
 
 	// Accounts are accounts whose balance records are accessible
 	// by the executing ApprovalProgram or ClearStateProgram. To
@@ -151,19 +152,23 @@ type ApplicationCallTxnFields struct {
 	// except for those where OnCompletion is equal to ClearStateOC. If
 	// this program fails, the transaction is rejected. This program may
 	// read and write local and global state for this application.
-	ApprovalProgram []byte `codec:"apap,allocbound=config.MaxAvailableAppProgramLen"`
+	ApprovalProgram []byte `codec:"apap,allocbound=bounds.MaxAvailableAppProgramLen"`
 
 	// ClearStateProgram is the stateful TEAL bytecode that executes on
 	// ApplicationCall transactions associated with this application when
 	// OnCompletion is equal to ClearStateOC. This program will not cause
 	// the transaction to be rejected, even if it fails. This program may
 	// read and write local and global state for this application.
-	ClearStateProgram []byte `codec:"apsu,allocbound=config.MaxAvailableAppProgramLen"`
+	ClearStateProgram []byte `codec:"apsu,allocbound=bounds.MaxAvailableAppProgramLen"`
 
 	// ExtraProgramPages specifies the additional app program len requested in pages.
 	// A page is MaxAppProgramLen bytes. This field enables execution of app programs
 	// larger than the default config, MaxAppProgramLen.
-	ExtraProgramPages uint32 `codec:"apep,omitempty"`
+	ExtraProgramPages uint32 `codec:"apep"`
+
+	// RejectVersion is the lowest application version for which this
+	// transaction should immediately fail. 0 indicates that no version check should be performed.
+	RejectVersion uint64 `codec:"aprv"`
 
 	// If you add any fields here, remember you MUST modify the Empty
 	// method below!
@@ -174,7 +179,7 @@ type BoxRef struct {
 	_struct struct{} `codec:",omitempty,omitemptyarray"`
 
 	Index uint64 `codec:"i"`
-	Name  []byte `codec:"n,allocbound=config.MaxBytesKeyValueLen"`
+	Name  []byte `codec:"n,allocbound=bounds.MaxBytesKeyValueLen"`
 }
 
 // Empty indicates whether or not all the fields in the
@@ -216,7 +221,137 @@ func (ac *ApplicationCallTxnFields) Empty() bool {
 	if ac.ExtraProgramPages != 0 {
 		return false
 	}
+	if ac.RejectVersion != 0 {
+		return false
+	}
 	return true
+}
+
+// wellFormed performs some stateless checks on the ApplicationCall transaction
+func (ac ApplicationCallTxnFields) wellFormed(proto config.ConsensusParams) error {
+
+	// Ensure requested action is valid
+	switch ac.OnCompletion {
+	case NoOpOC, OptInOC, CloseOutOC, ClearStateOC, UpdateApplicationOC, DeleteApplicationOC:
+		/* ok */
+	default:
+		return fmt.Errorf("invalid application OnCompletion")
+	}
+
+	if !proto.EnableAppVersioning && ac.RejectVersion > 0 {
+		return fmt.Errorf("tx.RejectVersion is not supported")
+	}
+
+	if ac.RejectVersion > 0 && ac.ApplicationID == 0 {
+		return fmt.Errorf("tx.RejectVersion cannot be set during creation")
+	}
+
+	// Programs may only be set for creation or update
+	if ac.ApplicationID != 0 && ac.OnCompletion != UpdateApplicationOC {
+		if len(ac.ApprovalProgram) != 0 || len(ac.ClearStateProgram) != 0 {
+			return fmt.Errorf("programs may only be specified during application creation or update")
+		}
+	} else {
+		// This will check version matching, but not downgrading. That
+		// depends on chain state (so we pass an empty AppParams)
+		err := CheckContractVersions(ac.ApprovalProgram, ac.ClearStateProgram, basics.AppParams{}, &proto)
+		if err != nil {
+			return err
+		}
+	}
+
+	effectiveEPP := ac.ExtraProgramPages
+	// Schemas and ExtraProgramPages may only be set during application creation
+	if ac.ApplicationID != 0 {
+		if ac.LocalStateSchema != (basics.StateSchema{}) ||
+			ac.GlobalStateSchema != (basics.StateSchema{}) {
+			return fmt.Errorf("local and global state schemas are immutable")
+		}
+		if ac.ExtraProgramPages != 0 {
+			return fmt.Errorf("tx.ExtraProgramPages is immutable")
+		}
+
+		if proto.EnableExtraPagesOnAppUpdate {
+			effectiveEPP = uint32(proto.MaxExtraAppProgramPages)
+		}
+
+	}
+
+	// Limit total number of arguments
+	if len(ac.ApplicationArgs) > proto.MaxAppArgs {
+		return fmt.Errorf("too many application args, max %d", proto.MaxAppArgs)
+	}
+
+	// Sum up argument lengths
+	var argSum uint64
+	for _, arg := range ac.ApplicationArgs {
+		argSum = basics.AddSaturate(argSum, uint64(len(arg)))
+	}
+
+	// Limit total length of all arguments
+	if argSum > uint64(proto.MaxAppTotalArgLen) {
+		return fmt.Errorf("application args total length too long, max len %d bytes", proto.MaxAppTotalArgLen)
+	}
+
+	// Limit number of accounts referred to in a single ApplicationCall
+	if len(ac.Accounts) > proto.MaxAppTxnAccounts {
+		return fmt.Errorf("tx.Accounts too long, max number of accounts is %d", proto.MaxAppTxnAccounts)
+	}
+
+	// Limit number of other app global states referred to
+	if len(ac.ForeignApps) > proto.MaxAppTxnForeignApps {
+		return fmt.Errorf("tx.ForeignApps too long, max number of foreign apps is %d", proto.MaxAppTxnForeignApps)
+	}
+
+	if len(ac.ForeignAssets) > proto.MaxAppTxnForeignAssets {
+		return fmt.Errorf("tx.ForeignAssets too long, max number of foreign assets is %d", proto.MaxAppTxnForeignAssets)
+	}
+
+	if len(ac.Boxes) > proto.MaxAppBoxReferences {
+		return fmt.Errorf("tx.Boxes too long, max number of box references is %d", proto.MaxAppBoxReferences)
+	}
+
+	// Limit the sum of all types of references that bring in account records
+	if len(ac.Accounts)+len(ac.ForeignApps)+len(ac.ForeignAssets)+len(ac.Boxes) > proto.MaxAppTotalTxnReferences {
+		return fmt.Errorf("tx references exceed MaxAppTotalTxnReferences = %d", proto.MaxAppTotalTxnReferences)
+	}
+
+	if ac.ExtraProgramPages > uint32(proto.MaxExtraAppProgramPages) {
+		return fmt.Errorf("tx.ExtraProgramPages exceeds MaxExtraAppProgramPages = %d", proto.MaxExtraAppProgramPages)
+	}
+
+	lap := len(ac.ApprovalProgram)
+	lcs := len(ac.ClearStateProgram)
+	pages := int(1 + effectiveEPP)
+	if lap > pages*proto.MaxAppProgramLen {
+		return fmt.Errorf("approval program too long. max len %d bytes", pages*proto.MaxAppProgramLen)
+	}
+	if lcs > pages*proto.MaxAppProgramLen {
+		return fmt.Errorf("clear state program too long. max len %d bytes", pages*proto.MaxAppProgramLen)
+	}
+	if lap+lcs > pages*proto.MaxAppTotalProgramLen {
+		return fmt.Errorf("app programs too long. max total len %d bytes", pages*proto.MaxAppTotalProgramLen)
+	}
+
+	for i, br := range ac.Boxes {
+		// recall 0 is the current app so indexes are shifted, thus test is for greater than, not gte.
+		if br.Index > uint64(len(ac.ForeignApps)) {
+			return fmt.Errorf("tx.Boxes[%d].Index is %d. Exceeds len(tx.ForeignApps)", i, br.Index)
+		}
+		if proto.EnableBoxRefNameError && len(br.Name) > proto.MaxAppKeyLen {
+			return fmt.Errorf("tx.Boxes[%d].Name too long, max len %d bytes", i, proto.MaxAppKeyLen)
+		}
+	}
+
+	if ac.LocalStateSchema.NumEntries() > proto.MaxLocalSchemaEntries {
+		return fmt.Errorf("tx.LocalStateSchema too large, max number of keys is %d", proto.MaxLocalSchemaEntries)
+	}
+
+	if ac.GlobalStateSchema.NumEntries() > proto.MaxGlobalSchemaEntries {
+		return fmt.Errorf("tx.GlobalStateSchema too large, max number of keys is %d", proto.MaxGlobalSchemaEntries)
+	}
+
+	return nil
 }
 
 // AddressByIndex converts an integer index into an address associated with the

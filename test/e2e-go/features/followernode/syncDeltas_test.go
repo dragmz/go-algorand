@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -73,8 +73,8 @@ func TestBasicSyncMode(t *testing.T) {
 	require.LessOrEqual(t, *txn.ConfirmedRound, uint64(5), "Transaction should be confirmed in the first 5 rounds")
 
 	// Let the network make some progress
-	waitForRound := uint64(5)
-	err = fixture.ClientWaitForRoundWithTimeout(fixture.GetAlgodClientForController(nc), waitForRound)
+	const waitForRound = 5
+	err = fixture.GetAlgodClientForController(nc).WaitForRoundWithTimeout(waitForRound)
 	a.NoError(err)
 
 	// Get the follower client, and exercise the sync/ledger functionality
@@ -82,13 +82,13 @@ func TestBasicSyncMode(t *testing.T) {
 	a.NoError(err)
 	followClient := fixture.GetAlgodClientForController(followControl)
 	// Now, catch up round by round, retrieving state deltas for each
-	for round := uint64(1); round <= waitForRound; round++ {
+	for round := basics.Round(1); round <= waitForRound; round++ {
 		// assert sync round set
 		rResp, err := followClient.GetSyncRound()
 		a.NoError(err)
 		a.Equal(round, rResp.Round)
 		// make some progress to round
-		err = fixture.ClientWaitForRoundWithTimeout(followClient, round)
+		err = followClient.WaitForRoundWithTimeout(round)
 		a.NoError(err)
 		// retrieve state delta
 		gResp, err := followClient.GetLedgerStateDelta(round)
@@ -113,6 +113,6 @@ func TestBasicSyncMode(t *testing.T) {
 		err = followClient.SetSyncRound(round + 1)
 		a.NoError(err)
 	}
-	err = fixture.LibGoalFixture.ClientWaitForRoundWithTimeout(fixture.LibGoalClient, waitForRound)
+	err = fixture.WaitForRoundWithTimeout(waitForRound)
 	a.NoError(err)
 }

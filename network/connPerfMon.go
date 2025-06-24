@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -139,7 +139,7 @@ func (pm *connectionPerformanceMonitor) ComparePeers(peers []Peer) bool {
 	pm.Lock()
 	defer pm.Unlock()
 	for _, peer := range peers {
-		if pm.monitoredConnections[peer] == false {
+		if !pm.monitoredConnections[peer] {
 			return false
 		}
 	}
@@ -177,10 +177,10 @@ func (pm *connectionPerformanceMonitor) Reset(peers []Peer) {
 func (pm *connectionPerformanceMonitor) Notify(msg *IncomingMessage) {
 	pm.Lock()
 	defer pm.Unlock()
-	if pm.monitoredConnections[msg.Sender] == false {
+	if !pm.monitoredConnections[msg.Sender] {
 		return
 	}
-	if pm.monitoredMessageTags[msg.Tag] == false {
+	if !pm.monitoredMessageTags[msg.Tag] {
 		return
 	}
 	switch pm.stage {

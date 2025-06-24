@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -69,6 +69,11 @@ type ScryptParams struct {
 	ScryptP int `json:"scrypt_p"`
 }
 
+// DefaultConfig returns the default KMDConfig
+func DefaultConfig(dataDir string) KMDConfig {
+	return defaultConfig(dataDir)
+}
+
 // defaultConfig returns the default KMDConfig
 func defaultConfig(dataDir string) KMDConfig {
 	return KMDConfig{
@@ -111,7 +116,7 @@ func LoadKMDConfig(dataDir string) (cfg KMDConfig, err error) {
 		// SaveObjectToFile may return an unhandled error because
 		// there is nothing to do if an error occurs
 		codecs.SaveObjectToFile(exampleFilename, cfg, true)
-		return cfg, nil
+		return cfg, nil //nolint:nilerr // intentional
 	}
 	// Fill in the non-default values
 	err = json.Unmarshal(dat, &cfg)
@@ -120,4 +125,15 @@ func LoadKMDConfig(dataDir string) (cfg KMDConfig, err error) {
 	}
 	err = cfg.Validate()
 	return
+}
+
+// SaveKMDConfig writes the kmd configuration to disk
+func SaveKMDConfig(dataDir string, cfg KMDConfig) error {
+	err := cfg.Validate()
+	if err != nil {
+		return err
+	}
+	configFilename := filepath.Join(dataDir, kmdConfigFilename)
+
+	return codecs.SaveObjectToFile(configFilename, cfg, true)
 }

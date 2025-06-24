@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -42,7 +42,6 @@ import (
 	"github.com/algorand/go-algorand/netdeploy"
 	"github.com/algorand/go-algorand/nodecontrol"
 	"github.com/algorand/go-algorand/protocol"
-	"github.com/algorand/go-algorand/test/e2e-go/globals"
 	"github.com/algorand/go-algorand/util/db"
 )
 
@@ -67,26 +66,32 @@ func (f *RestClientFixture) SetConsensus(consensus config.ConsensusProtocols) {
 	f.consensus = consensus
 }
 
+// AlterConsensus allows the caller to modify the consensus settings for a given version.
+func (f *RestClientFixture) AlterConsensus(ver protocol.ConsensusVersion, alter func(config.ConsensusParams) config.ConsensusParams) {
+	if f.consensus == nil {
+		f.consensus = make(config.ConsensusProtocols)
+	}
+	f.consensus[ver] = alter(f.ConsensusParamsFromVer(ver))
+}
+
 // FasterConsensus speeds up the given consensus version in two ways. The seed
 // refresh lookback is set to 8 (instead of 80), so the 320 round balance
 // lookback becomes 32.  And, if the architecture implies it can be handled,
 // round times are shortened by lowering vote timeouts.
 func (f *RestClientFixture) FasterConsensus(ver protocol.ConsensusVersion, timeout time.Duration, lookback basics.Round) {
-	if f.consensus == nil {
-		f.consensus = make(config.ConsensusProtocols)
-	}
-	fast := config.Consensus[ver]
-	// balanceRound is 4 * SeedRefreshInterval
-	if lookback%4 != 0 {
-		panic(fmt.Sprintf("lookback must be a multiple of 4, got %d", lookback))
-	}
-	fast.SeedRefreshInterval = uint64(lookback) / 4
-	// and speed up the rounds while we're at it
-	if runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64" {
-		fast.AgreementFilterTimeoutPeriod0 = timeout
-		fast.AgreementFilterTimeout = timeout
-	}
-	f.consensus[ver] = fast
+	f.AlterConsensus(ver, func(fast config.ConsensusParams) config.ConsensusParams {
+		// balanceRound is 4 * SeedRefreshInterval
+		if lookback%4 != 0 {
+			panic(fmt.Sprintf("lookback must be a multiple of 4, got %d", lookback))
+		}
+		fast.SeedRefreshInterval = uint64(lookback) / 4
+		// and speed up the rounds while we're at it
+		if runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64" {
+			fast.AgreementFilterTimeoutPeriod0 = timeout
+			fast.AgreementFilterTimeout = timeout
+		}
+		return fast
+	})
 }
 
 // Setup is called to initialize the test fixture for the test(s)
@@ -122,7 +127,15 @@ func (f *LibGoalFixture) setup(test TestingTB, testName string, templateFile str
 	importKeys := false // Don't automatically import root keys when creating folders, we'll import on-demand
 	file, err := os.Open(templateFile)
 	f.failOnError(err, "Template file could not be opened: %v")
-	network, err := netdeploy.CreateNetworkFromTemplate("test", f.rootDir, file, f.binDir, importKeys, f.nodeExitWithError, f.consensus, overrides...)
+	defer file.Close()
+
+	// Override the kmd session lifetime to 5 minutes to prevent kmd wallet handles from expiring
+	kmdConfOverride := netdeploy.OverrideKmdConfig(netdeploy.TemplateKMDConfig{SessionLifetimeSecs: 300})
+	// copy overrides to prevent caller's data from being modified
+	extraOverrides := append([]netdeploy.TemplateOverride(nil), overrides...)
+	extraOverrides = append(extraOverrides, kmdConfOverride)
+
+	network, err := netdeploy.CreateNetworkFromTemplate("test", f.rootDir, file, f.binDir, importKeys, f.nodeExitWithError, f.consensus, extraOverrides...)
 	f.failOnError(err, "CreateNetworkFromTemplate failed: %v")
 	f.network = network
 
@@ -194,18 +207,18 @@ func (f *LibGoalFixture) importRootKeys(lg *libgoal.Client, dataDir string) {
 			}
 
 			// Fetch an account.Root from the database
-			root, err := account.RestoreRoot(handle)
-			if err != nil {
+			root, err1 := account.RestoreRoot(handle)
+			if err1 != nil {
 				// Couldn't read it, skip it
 				continue
 			}
 
 			secretKey := root.Secrets().SK
-			wh, err := lg.GetUnencryptedWalletHandle()
-			f.failOnError(err, "couldn't get default wallet handle: %v")
-			_, err = lg.ImportKey(wh, secretKey[:])
-			if err != nil && !strings.Contains(err.Error(), "key already exists") {
-				f.failOnError(err, "couldn't import secret: %v")
+			wh, err1 := lg.GetUnencryptedWalletHandle()
+			f.failOnError(err1, "couldn't get default wallet handle: %v")
+			_, err1 = lg.ImportKey(wh, secretKey[:])
+			if err1 != nil && !strings.Contains(err1.Error(), "key already exists") {
+				f.failOnError(err1, "couldn't import secret: %v")
 			}
 			accountsWithRootKeys[root.Address().String()] = true
 			handle.Close()
@@ -452,75 +465,6 @@ func (f *LibGoalFixture) GetParticipationOnlyAccounts(lg libgoal.Client) []accou
 	return f.clientPartKeys[lg.DataDir()]
 }
 
-// WaitForRoundWithTimeout waits for a given round to reach. The implementation also ensures to limit the wait time for each round to the
-// globals.MaxTimePerRound so we can alert when we're getting "hung" before waiting for all the expected rounds to reach.
-func (f *LibGoalFixture) WaitForRoundWithTimeout(roundToWaitFor uint64) error {
-	return f.ClientWaitForRoundWithTimeout(f.LibGoalClient, roundToWaitFor)
-}
-
-// ClientWaitForRoundWithTimeout waits for a given round to be reached by the specific client/node. The implementation
-// also ensures to limit the wait time for each round to the globals.MaxTimePerRound so we can alert when we're
-// getting "hung" before waiting for all the expected rounds to reach.
-func (f *LibGoalFixture) ClientWaitForRoundWithTimeout(client libgoal.Client, roundToWaitFor uint64) error {
-	status, err := client.Status()
-	require.NoError(f.t, err)
-	lastRound := status.LastRound
-
-	// If node is already at or past target round, we're done
-	if lastRound >= roundToWaitFor {
-		return nil
-	}
-
-	roundTime := globals.MaxTimePerRound * 10 // For first block, we wait much longer
-	roundComplete := make(chan error, 2)
-
-	for nextRound := lastRound + 1; lastRound < roundToWaitFor; {
-		roundStarted := time.Now()
-
-		go func(done chan error) {
-			err := f.ClientWaitForRound(client, nextRound, roundTime)
-			done <- err
-		}(roundComplete)
-
-		select {
-		case lastError := <-roundComplete:
-			if lastError != nil {
-				close(roundComplete)
-				return lastError
-			}
-		case <-time.After(roundTime):
-			// we've timed out.
-			time := time.Now().Sub(roundStarted)
-			return fmt.Errorf("fixture.WaitForRound took %3.2f seconds between round %d and %d", time.Seconds(), lastRound, nextRound)
-		}
-
-		roundTime = singleRoundMaxTime
-		lastRound++
-		nextRound++
-	}
-	return nil
-}
-
-// ClientWaitForRound waits up to the specified amount of time for
-// the network to reach or pass the specified round, on the specific client/node
-func (f *LibGoalFixture) ClientWaitForRound(client libgoal.Client, round uint64, waitTime time.Duration) error {
-	timeout := time.NewTimer(waitTime)
-	for {
-		status, err := client.Status()
-		if err != nil {
-			return err
-		}
-		if status.LastRound >= round {
-			return nil
-		}
-		select {
-		case <-timeout.C:
-			return fmt.Errorf("timeout waiting for round %v", round)
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
-}
-
 // CurrentConsensusParams returns the consensus parameters for the currently active protocol
 func (f *LibGoalFixture) CurrentConsensusParams() (consensus config.ConsensusParams, err error) {
 	status, err := f.LibGoalClient.Status()
@@ -532,20 +476,20 @@ func (f *LibGoalFixture) CurrentConsensusParams() (consensus config.ConsensusPar
 }
 
 // ConsensusParams returns the consensus parameters for the protocol from the specified round
-func (f *LibGoalFixture) ConsensusParams(round uint64) (consensus config.ConsensusParams, err error) {
+func (f *LibGoalFixture) ConsensusParams(round basics.Round) (config.ConsensusParams, error) {
 	block, err := f.LibGoalClient.BookkeepingBlock(round)
 	if err != nil {
-		return
+		return config.ConsensusParams{}, err
 	}
-	version := protocol.ConsensusVersion(block.CurrentProtocol)
-	if f.consensus != nil {
-		consensus, has := f.consensus[version]
-		if has {
-			return consensus, nil
-		}
+	return f.ConsensusParamsFromVer(block.CurrentProtocol), nil
+}
+
+// ConsensusParamsFromVer looks up a consensus version, allowing for override
+func (f *LibGoalFixture) ConsensusParamsFromVer(cv protocol.ConsensusVersion) config.ConsensusParams {
+	if consensus, has := f.consensus[cv]; has {
+		return consensus
 	}
-	consensus = config.Consensus[version]
-	return
+	return config.Consensus[cv]
 }
 
 // CurrentMinFeeAndBalance returns the MinTxnFee and MinBalance for the currently active protocol
@@ -567,7 +511,7 @@ func (f *LibGoalFixture) CurrentMinFeeAndBalance() (minFee, minBalance uint64, e
 // MinFeeAndBalance returns the MinTxnFee and MinBalance for the protocol from the specified round
 // If MinBalance is 0, we provide a resonable default of 1000 to ensure accounts have funds when
 // MinBalance is used to fund new accounts
-func (f *LibGoalFixture) MinFeeAndBalance(round uint64) (minFee, minBalance uint64, err error) {
+func (f *LibGoalFixture) MinFeeAndBalance(round basics.Round) (minFee, minBalance uint64, err error) {
 	params, err := f.ConsensusParams(round)
 	if err != nil {
 		return
@@ -580,7 +524,7 @@ func (f *LibGoalFixture) MinFeeAndBalance(round uint64) (minFee, minBalance uint
 }
 
 // TransactionProof returns a proof for usage in merkle array verification for the provided transaction.
-func (f *LibGoalFixture) TransactionProof(txid string, round uint64, hashType crypto.HashType) (model.TransactionProofResponse, merklearray.SingleLeafProof, error) {
+func (f *LibGoalFixture) TransactionProof(txid string, round basics.Round, hashType crypto.HashType) (model.TransactionProofResponse, merklearray.SingleLeafProof, error) {
 	proofResp, err := f.LibGoalClient.TransactionProof(txid, round, hashType)
 	if err != nil {
 		return model.TransactionProofResponse{}, merklearray.SingleLeafProof{}, err
@@ -595,7 +539,7 @@ func (f *LibGoalFixture) TransactionProof(txid string, round uint64, hashType cr
 }
 
 // LightBlockHeaderProof returns a proof for usage in merkle array verification for the provided block's light block header.
-func (f *LibGoalFixture) LightBlockHeaderProof(round uint64) (model.LightBlockHeaderProofResponse, merklearray.SingleLeafProof, error) {
+func (f *LibGoalFixture) LightBlockHeaderProof(round basics.Round) (model.LightBlockHeaderProofResponse, merklearray.SingleLeafProof, error) {
 	proofResp, err := f.LibGoalClient.LightBlockHeaderProof(round)
 
 	if err != nil {

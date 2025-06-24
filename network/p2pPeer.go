@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024 Algorand, Inc.
+// Copyright (C) 2019-2025 Algorand, Inc.
 // This file is part of go-algorand
 //
 // go-algorand is free software: you can redistribute it and/or modify
@@ -75,8 +75,14 @@ func (c *wsPeerConnP2P) CloseWithMessage([]byte, time.Time) error {
 
 func (c *wsPeerConnP2P) SetReadLimit(int64) {}
 
-func (c *wsPeerConnP2P) CloseWithoutFlush() error {
-	err := c.stream.Close()
+func (c *wsPeerConnP2P) CloseWithoutFlush() (err error) {
+	err = c.stream.Reset()
+	defer func() {
+		err0 := c.stream.Conn().Close()
+		if err == nil {
+			err = err0
+		}
+	}()
 	if err != nil && err != yamux.ErrStreamClosed && err != yamux.ErrSessionShutdown && err != yamux.ErrStreamReset {
 		return err
 	}
