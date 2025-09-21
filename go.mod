@@ -25,7 +25,7 @@ require (
 	github.com/gofrs/flock v0.7.0
 	github.com/golang/snappy v0.0.4
 	github.com/google/go-cmp v0.6.0
-	github.com/google/go-querystring v1.0.0
+	github.com/google/go-querystring v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/ipfs/go-log v1.0.5
@@ -63,6 +63,7 @@ require (
 )
 
 require (
+	github.com/algorand/go-algorand-sdk/v2 v2.11.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -80,6 +81,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
+	github.com/dragmz/teal v0.0.0-20250921225114-13a8b48d74a4 // indirect
 	github.com/elastic/gosigar v0.14.3 // indirect
 	github.com/flynn/noise v1.1.0 // indirect
 	github.com/fortytw2/leaktest v1.3.0 // indirect
