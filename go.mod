@@ -21,12 +21,13 @@ require (
 	github.com/consensys/gnark-crypto v0.18.1
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c
 	github.com/dchest/siphash v1.2.1
+	github.com/dragmz/teal v0.0.0-20250921225114-13a8b48d74a4
 	github.com/fatih/color v1.13.0
 	github.com/getkin/kin-openapi v0.144.0
 	github.com/gofrs/flock v0.7.0
 	github.com/golang/snappy v0.0.5-0.20231225225746-43d5d4cd4e0e
 	github.com/google/go-cmp v0.7.0
-	github.com/google/go-querystring v1.0.0
+	github.com/google/go-querystring v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/hdevalence/ed25519consensus v0.2.0
@@ -48,6 +49,7 @@ require (
 	github.com/multiformats/go-multiaddr-dns v0.4.1
 	github.com/oapi-codegen/runtime v1.1.1
 	github.com/olivere/elastic v6.2.14+incompatible
+	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/sirupsen/logrus v1.9.1
@@ -68,6 +70,7 @@ require (
 )
 
 require (
+	github.com/algorand/go-algorand-sdk/v2 v2.11.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -163,7 +166,6 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v4 v4.0.2 // indirect
 	github.com/pion/webrtc/v4 v4.1.2 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/polydawn/refmt v0.89.1-0.20231129105047-37766d95467a // indirect
 	github.com/prometheus/common v0.67.5 // indirect
