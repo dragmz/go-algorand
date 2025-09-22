@@ -81,7 +81,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
-	github.com/dragmz/teal v0.0.0-20250921225114-13a8b48d74a4 // indirect
+	github.com/dragmz/teal v0.0.0-20250922070242-65be0f7a455a // indirect
 	github.com/elastic/gosigar v0.14.3 // indirect
 	github.com/flynn/noise v1.1.0 // indirect
 	github.com/fortytw2/leaktest v1.3.0 // indirect
