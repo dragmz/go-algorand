@@ -123,6 +123,9 @@ func runLsp(a lspArgs) (int, error) {
 		return res
 	}))
 
+	opts = append(opts, lsp.WithOpDocShortHandler(logic.OpDoc))
+	opts = append(opts, lsp.WithOpDocExtraHandler(logic.OpDocExtra))
+
 	l, err := lsp.New(r, w, opts...)
 	if err != nil {
 		return -3, errors.Wrap(err, "failed to create lsp")
