@@ -133,6 +133,8 @@ github.com/dragmz/teal v0.0.0-20250922070242-65be0f7a455a h1:7IhoVHkWWSwIQ9k1gXC
 github.com/dragmz/teal v0.0.0-20250922070242-65be0f7a455a/go.mod h1:YBQnJxEAcPGIsgMTYhSptX/Z3r0/kH36sxkiwr8A4dI=
 github.com/dragmz/teal v0.0.0-20250923221912-d7cdd2b77f27 h1:W+uL0V4UkuyHnAgn5RCeNWnKkRdUXCltWm8+kFDVRDQ=
 github.com/dragmz/teal v0.0.0-20250923221912-d7cdd2b77f27/go.mod h1:YBQnJxEAcPGIsgMTYhSptX/Z3r0/kH36sxkiwr8A4dI=
+github.com/dragmz/teal v0.0.0-20250923223034-a0d61da2823d h1:/1zOjadafpyXGtIkSBVFW/TvkONsSHZ1KuMx2mxkQSQ=
+github.com/dragmz/teal v0.0.0-20250923223034-a0d61da2823d/go.mod h1:YBQnJxEAcPGIsgMTYhSptX/Z3r0/kH36sxkiwr8A4dI=
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
 github.com/eknkc/amber v0.0.0-20171010120322-cdade1c07385/go.mod h1:0vRUJqYpeSZifjYj7uP3BG/gKcuzL9xWVV/Y+cK33KM=
 github.com/elastic/gosigar v0.12.0/go.mod h1:iXRIGg2tLnu7LBdpqzyQfGDEidKCfWcCMS0WKyPWoMs=
