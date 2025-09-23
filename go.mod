@@ -21,7 +21,7 @@ require (
 	github.com/consensys/gnark-crypto v0.18.1
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c
 	github.com/dchest/siphash v1.2.1
-	github.com/dragmz/teal v0.0.0-20250923221912-d7cdd2b77f27
+	github.com/dragmz/teal v0.0.0-20250923223034-a0d61da2823d
 	github.com/fatih/color v1.13.0
 	github.com/getkin/kin-openapi v0.144.0
 	github.com/gofrs/flock v0.7.0
