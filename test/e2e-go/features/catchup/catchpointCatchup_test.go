@@ -285,7 +285,7 @@ func getFixture(consensusParams *config.ConsensusParams) *fixtures.RestClientFix
 	return &fixture
 }
 
-func TestCatchpointCatchupFailure(t *testing.T) {
+func TestCatchpointCatchupErr(t *testing.T) {
 	// Overview of this test:
 	// Start a two-node network (primary has 100%, using has 0%)
 	// create a web proxy, have the using node use it as a peer, blocking all requests for round #2. ( and allowing everything else )
@@ -550,8 +550,8 @@ func downloadCatchpointFile(t *testing.T, a *require.Assertions, baseURL string,
 	var chunks []ledger.CatchpointSnapshotChunkV6
 	for _, d := range tarData {
 		t.Logf("tar filename: %s, size %d", d.headerName, len(d.data))
-		if strings.HasPrefix(d.headerName, "balances.") { // chunk file
-			idxStr := strings.TrimSuffix(strings.TrimPrefix(d.headerName, "balances."), ".msgpack")
+		if after, ok := strings.CutPrefix(d.headerName, "balances."); ok { // chunk file
+			idxStr := strings.TrimSuffix(after, ".msgpack")
 			idx, err := strconv.Atoi(idxStr)
 			a.NoError(err)
 			var c ledger.CatchpointSnapshotChunkV6
