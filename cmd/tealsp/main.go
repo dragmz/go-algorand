@@ -146,6 +146,24 @@ func runLsp(a lspArgs) (int, error) {
 	opts = append(opts, lsp.WithOpDocShortHandler(logic.OpDoc))
 	opts = append(opts, lsp.WithOpDocExtraHandler(logic.OpDocExtra))
 
+	opts = append(opts, lsp.WithPrepareOffsetsHandler(func(source string) map[int]lsp.SourceLocation {
+		ops, err := logic.AssembleString(source)
+		if err != nil {
+			return map[int]lsp.SourceLocation{}
+		}
+
+		res := make(map[int]lsp.SourceLocation, len(ops.OffsetToSource))
+
+		for i, off := range ops.OffsetToSource {
+			res[i] = lsp.SourceLocation{
+				Line:   off.Line,
+				Column: off.Column,
+			}
+		}
+
+		return res
+	}))
+
 	l, err := lsp.New(r, w, opts...)
 	if err != nil {
 		return -3, errors.Wrap(err, "failed to create lsp")
