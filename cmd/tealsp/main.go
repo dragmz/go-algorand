@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -117,6 +118,25 @@ func runLsp(a lspArgs) (int, error) {
 				},
 				Severity: &sev,
 				Message:  w.Error(),
+			})
+		}
+
+		if err == nil {
+			info := teal.DiagInfo
+
+			res = append(res, lsp.LspDiagnostic{
+				Range: lsp.LspRange{
+					Start: lsp.LspPosition{
+						Line:      0,
+						Character: 0,
+					},
+					End: lsp.LspPosition{
+						Line:      0,
+						Character: 0,
+					},
+				},
+				Severity: &info,
+				Message:  fmt.Sprintf("Program size: %d", len(ops.Program)),
 			})
 		}
 
