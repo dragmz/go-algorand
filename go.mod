@@ -9,6 +9,7 @@ require (
 	github.com/DataDog/zstd v1.5.7
 	github.com/algorand/avm-abi v0.2.0
 	github.com/algorand/falcon v0.1.0
+	github.com/algorand/go-algorand-sdk/v2 v2.11.0
 	github.com/algorand/go-codec/codec v1.1.10
 	github.com/algorand/go-deadlock v0.2.5
 	github.com/algorand/go-sumhash v0.1.0
@@ -21,7 +22,6 @@ require (
 	github.com/consensys/gnark-crypto v0.18.1
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c
 	github.com/dchest/siphash v1.2.1
-	github.com/dragmz/teal v0.0.0-20250929215600-c18811f3fc40
 	github.com/fatih/color v1.13.0
 	github.com/getkin/kin-openapi v0.144.0
 	github.com/gofrs/flock v0.7.0
@@ -70,7 +70,6 @@ require (
 )
 
 require (
-	github.com/algorand/go-algorand-sdk/v2 v2.11.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect

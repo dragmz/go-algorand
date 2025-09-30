@@ -2,14 +2,12 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"io"
 	"net"
 	"os"
 
-	"github.com/algorand/go-algorand/data/transactions/logic"
-	"github.com/dragmz/teal"
-	"github.com/dragmz/teal/lsp"
+	"github.com/algorand/go-algorand/lsp"
+
 	"github.com/pkg/errors"
 )
 
@@ -46,123 +44,6 @@ func runLsp(a lspArgs) (int, error) {
 
 		opts = append(opts, lsp.WithDebug(f))
 	}
-
-	opts = append(opts, lsp.WithPrepareDiagnosticsHandler(func(source string) []lsp.LspDiagnostic {
-		var res []lsp.LspDiagnostic
-
-		ops, err := logic.AssembleString(source)
-
-		if err != nil {
-			if len(ops.Errors) == 0 && len(ops.Warnings) == 0 {
-				if err != nil {
-					sev := teal.DiagErr
-					res = append(res, lsp.LspDiagnostic{
-						Range: lsp.LspRange{
-							Start: lsp.LspPosition{
-								Line:      0,
-								Character: 0,
-							},
-							End: lsp.LspPosition{
-								Line:      0,
-								Character: 0,
-							},
-						},
-						Severity: &sev,
-						Message:  err.Error(),
-					})
-				}
-			}
-		}
-
-		for _, e := range ops.Errors {
-			l := e.Line
-			c := e.Column
-
-			if l != 0 {
-				l--
-			}
-
-			if c != 0 {
-				c--
-			}
-
-			sev := teal.DiagErr
-			res = append(res, lsp.LspDiagnostic{
-				Range: lsp.LspRange{
-					Start: lsp.LspPosition{
-						Line:      l,
-						Character: c,
-					},
-					End: lsp.LspPosition{
-						Line:      l,
-						Character: c,
-					},
-				},
-				Severity: &sev,
-				Message:  e.Unwrap().Error(),
-			})
-		}
-
-		for _, w := range ops.Warnings {
-			sev := teal.DiagWarn
-			res = append(res, lsp.LspDiagnostic{
-				Range: lsp.LspRange{
-					Start: lsp.LspPosition{
-						Line:      0,
-						Character: 0,
-					},
-					End: lsp.LspPosition{
-						Line:      0,
-						Character: 0,
-					},
-				},
-				Severity: &sev,
-				Message:  w.Error(),
-			})
-		}
-
-		if err == nil {
-			info := teal.DiagInfo
-
-			res = append(res, lsp.LspDiagnostic{
-				Range: lsp.LspRange{
-					Start: lsp.LspPosition{
-						Line:      0,
-						Character: 0,
-					},
-					End: lsp.LspPosition{
-						Line:      0,
-						Character: 0,
-					},
-				},
-				Severity: &info,
-				Message:  fmt.Sprintf("Program size: %d", len(ops.Program)),
-			})
-		}
-
-		return res
-	}))
-
-	opts = append(opts, lsp.WithOpDocShortHandler(logic.OpDoc))
-	opts = append(opts, lsp.WithOpDocExtraHandler(logic.OpDocExtra))
-
-	opts = append(opts, lsp.WithPrepareOffsetsHandler(func(source string) map[int]lsp.SourceLocation {
-		ops, err := logic.AssembleString(source)
-		if err != nil {
-			return map[int]lsp.SourceLocation{}
-		}
-
-		res := make(map[int]lsp.SourceLocation, len(ops.OffsetToSource))
-
-		for i, off := range ops.OffsetToSource {
-			res[i] = lsp.SourceLocation{
-				Line:   off.Line,
-				Column: off.Column,
-			}
-		}
-
-		return res
-	}))
 
 	l, err := lsp.New(r, w, opts...)
 	if err != nil {
