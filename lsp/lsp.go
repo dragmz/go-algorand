@@ -994,6 +994,17 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					return err
 				}
 
+				if res.AssembleError != nil {
+					return res.AssembleError
+				}
+
+				if res.OpStream == nil || res.OpStream.OffsetToSource == nil {
+					return l.fail(h.Id, lspError{
+						Code:    3,
+						Message: "no opstream",
+					})
+				}
+
 				loc, ok := res.OpStream.OffsetToSource[body.Params.Arguments.Pc]
 				if !ok {
 					return l.fail(h.Id, lspError{
@@ -1351,6 +1362,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				return err
 			}
 
+			if res.AssembleError != nil {
+				return res.AssembleError
+			}
+
 			var cls []LspCodeLens
 
 			if l.config.LensRefs {
@@ -1375,22 +1390,24 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			if l.config.PcLens {
-				for pc, loc := range res.OpStream.OffsetToSource {
-					cls = append(cls, LspCodeLens{
-						Range: LspRange{
-							Start: LspPosition{
-								Line:      loc.Line,
-								Character: loc.Column,
+				if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
+					for pc, loc := range res.OpStream.OffsetToSource {
+						cls = append(cls, LspCodeLens{
+							Range: LspRange{
+								Start: LspPosition{
+									Line:      loc.Line,
+									Character: loc.Column,
+								},
+								End: LspPosition{
+									Line:      loc.Line,
+									Character: loc.Column,
+								},
 							},
-							End: LspPosition{
-								Line:      loc.Line,
-								Character: loc.Column,
+							Command: &LspCommand{
+								Title: fmt.Sprintf("pc: %d", pc),
 							},
-						},
-						Command: &LspCommand{
-							Title: fmt.Sprintf("pc: %d", pc),
-						},
-					})
+						})
+					}
 				}
 			}
 
@@ -1405,6 +1422,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				return err
+			}
+
+			if res.AssembleError != nil {
+				return res.AssembleError
 			}
 
 			ihs := []LspInlayHint{}
@@ -1446,15 +1467,17 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			if l.config.PcInlay {
-				for pc, loc := range res.OpStream.OffsetToSource {
-					ihs = append(ihs, LspInlayHint{
-						Position: LspPosition{
-							Line:      loc.Line,
-							Character: loc.Column,
-						},
-						Label: fmt.Sprintf("pc: %d", pc),
-						Kind:  parameter,
-					})
+				if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
+					for pc, loc := range res.OpStream.OffsetToSource {
+						ihs = append(ihs, LspInlayHint{
+							Position: LspPosition{
+								Line:      loc.Line,
+								Character: loc.Column,
+							},
+							Label: fmt.Sprintf("pc: %d", pc),
+							Kind:  parameter,
+						})
+					}
 				}
 			}
 
@@ -1900,35 +1923,31 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				return err
 			}
 
-			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				return err
 			}
 
 			ds := []LspDiagnostic{}
-			if doc != nil {
-				if err != nil {
-					if len(res.OpStream.Errors) == 0 && len(res.OpStream.Warnings) == 0 {
-						if err != nil {
-							sev := DiagErr
-							ds = append(ds, LspDiagnostic{
-								Range: LspRange{
-									Start: LspPosition{
-										Line:      0,
-										Character: 0,
-									},
-									End: LspPosition{
-										Line:      0,
-										Character: 0,
-									},
-								},
-								Severity: &sev,
-								Message:  err.Error(),
-							})
-						}
-					}
-				}
 
+			if res.AssembleError != nil {
+				ds = append(ds, LspDiagnostic{
+					Range: LspRange{
+						Start: LspPosition{
+							Line:      0,
+							Character: 0,
+						},
+						End: LspPosition{
+							Line:      0,
+							Character: 0,
+						},
+					},
+					Severity: func() *int { sev := DiagErr; return &sev }(),
+					Message:  res.AssembleError.Error(),
+				})
+			}
+
+			if res.OpStream != nil {
 				for _, e := range res.OpStream.Errors {
 					l := e.Line
 					c := e.Column
@@ -1975,25 +1994,25 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						Message:  w.Error(),
 					})
 				}
+			}
 
-				if err == nil {
-					info := DiagInfo
+			if res.AssembleError == nil && res.OpStream != nil {
+				info := DiagInfo
 
-					ds = append(ds, LspDiagnostic{
-						Range: LspRange{
-							Start: LspPosition{
-								Line:      0,
-								Character: 0,
-							},
-							End: LspPosition{
-								Line:      0,
-								Character: 0,
-							},
+				ds = append(ds, LspDiagnostic{
+					Range: LspRange{
+						Start: LspPosition{
+							Line:      0,
+							Character: 0,
 						},
-						Severity: &info,
-						Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
-					})
-				}
+						End: LspPosition{
+							Line:      0,
+							Character: 0,
+						},
+					},
+					Severity: &info,
+					Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
+				})
 			}
 
 			return l.success(h.Id, lspFullDocumentDiagnosticReport{
