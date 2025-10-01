@@ -2835,6 +2835,9 @@ type ProcessResult struct {
 
 	RefCounts map[string]int
 	Defines   map[string]bool
+
+	OpStream      *logic.OpStream
+	AssembleError error
 }
 
 func (r ProcessResult) AvailableOps() []opItem {
@@ -3721,28 +3724,32 @@ func Process(source string) *ProcessResult {
 		syms[i+len(lsyms)] = c.defs[i]
 	}
 
+	os, err := logic.AssembleString(source)
+
 	result := &ProcessResult{
-		Mode:         c.mode,
-		Version:      c.version,
-		VersionToken: c.vtok,
-		Diagnostics:  c.diag,
-		MissRefs:     mrefs,
-		Symbols:      syms,
-		SymbolRefs:   c.refs,
-		Tokens:       ts,
-		Lines:        lines,
-		Listing:      c.ops,
-		Sublisting:   c.lops,
-		Ops:          ops,
-		Numbers:      c.nums,
-		Bools:        c.bools,
-		Strings:      c.strs,
-		Keywords:     c.keys,
-		Macros:       c.mcrs,
-		Redundants:   linter.reds,
-		Versions:     vers,
-		RefCounts:    c.refc,
-		Defines:      c.defines,
+		Mode:          c.mode,
+		Version:       c.version,
+		VersionToken:  c.vtok,
+		Diagnostics:   c.diag,
+		MissRefs:      mrefs,
+		Symbols:       syms,
+		SymbolRefs:    c.refs,
+		Tokens:        ts,
+		Lines:         lines,
+		Listing:       c.ops,
+		Sublisting:    c.lops,
+		Ops:           ops,
+		Numbers:       c.nums,
+		Bools:         c.bools,
+		Strings:       c.strs,
+		Keywords:      c.keys,
+		Macros:        c.mcrs,
+		Redundants:    linter.reds,
+		Versions:      vers,
+		RefCounts:     c.refc,
+		Defines:       c.defines,
+		OpStream:      os,
+		AssembleError: err,
 	}
 
 	return result

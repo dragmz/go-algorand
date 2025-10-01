@@ -989,14 +989,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					return err
 				}
 
-				doc := l.docs[body.Params.Arguments.Uri]
-				if doc == nil {
-					return errors.New("doc not found")
+				_, res, err := l.prepare(body.Params.Arguments.Uri)
+				if err != nil {
+					return err
 				}
 
-				ops, _ := logic.AssembleString(doc.s)
-
-				loc, ok := ops.OffsetToSource[body.Params.Arguments.Pc]
+				loc, ok := res.OpStream.OffsetToSource[body.Params.Arguments.Pc]
 				if !ok {
 					return l.fail(h.Id, lspError{
 						Code:    3,
@@ -1348,7 +1346,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				return err
 			}
 
-			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				return err
 			}
@@ -1377,8 +1375,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			if l.config.PcLens {
-				ops, _ := logic.AssembleString(doc.s)
-				for pc, loc := range ops.OffsetToSource {
+				for pc, loc := range res.OpStream.OffsetToSource {
 					cls = append(cls, LspCodeLens{
 						Range: LspRange{
 							Start: LspPosition{
@@ -1405,7 +1402,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				return err
 			}
 
-			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				return err
 			}
@@ -1449,8 +1446,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			if l.config.PcInlay {
-				ops, _ := logic.AssembleString(doc.s)
-				for pc, loc := range ops.OffsetToSource {
+				for pc, loc := range res.OpStream.OffsetToSource {
 					ihs = append(ihs, LspInlayHint{
 						Position: LspPosition{
 							Line:      loc.Line,
@@ -1904,13 +1900,15 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				return err
 			}
 
-			doc := l.docs[req.Params.TextDocument.Uri]
+			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err != nil {
+				return err
+			}
+
 			ds := []LspDiagnostic{}
 			if doc != nil {
-				ops, err := logic.AssembleString(doc.s)
-
 				if err != nil {
-					if len(ops.Errors) == 0 && len(ops.Warnings) == 0 {
+					if len(res.OpStream.Errors) == 0 && len(res.OpStream.Warnings) == 0 {
 						if err != nil {
 							sev := DiagErr
 							ds = append(ds, LspDiagnostic{
@@ -1931,7 +1929,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					}
 				}
 
-				for _, e := range ops.Errors {
+				for _, e := range res.OpStream.Errors {
 					l := e.Line
 					c := e.Column
 
@@ -1960,7 +1958,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					})
 				}
 
-				for _, w := range ops.Warnings {
+				for _, w := range res.OpStream.Warnings {
 					sev := DiagWarn
 					ds = append(ds, LspDiagnostic{
 						Range: LspRange{
@@ -1993,7 +1991,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 							},
 						},
 						Severity: &info,
-						Message:  fmt.Sprintf("Program size: %d", len(ops.Program)),
+						Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
 					})
 				}
 			}
