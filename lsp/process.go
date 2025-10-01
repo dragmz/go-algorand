@@ -78,7 +78,7 @@ func init() {
 
 		switch t {
 		case OpArgTypeTxnaField:
-			for name, spec := range logic.TxnFieldSpecByName {
+			for name, spec := range logic.TxnFieldSpecByName() {
 				if spec.Array() {
 					vals = append(vals, opItemArgVal{
 						Value:   uint64(spec.Field()),
@@ -90,7 +90,7 @@ func init() {
 				}
 			}
 		case OpArgTypeItxnField:
-			for name, spec := range logic.TxnFieldSpecByName {
+			for name, spec := range logic.TxnFieldSpecByName() {
 				if spec.ItxVersion() > 0 {
 					vals = append(vals, opItemArgVal{
 						Value:   uint64(spec.Field()),
@@ -102,7 +102,7 @@ func init() {
 				}
 			}
 		case OpArgTypeTxnField:
-			for name, spec := range logic.TxnFieldSpecByName {
+			for name, spec := range logic.TxnFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -112,7 +112,7 @@ func init() {
 				vals2[int(spec.Field())] = spec.FieldString()
 			}
 		case OpArgTypeAcctParamsField:
-			for name, spec := range logic.AcctParamsFieldSpecByName {
+			for name, spec := range logic.AcctParamsFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -123,7 +123,7 @@ func init() {
 			}
 
 		case OpArgTypeAppParamsField:
-			for name, spec := range logic.AppParamsFieldSpecByName {
+			for name, spec := range logic.AppParamsFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -134,7 +134,7 @@ func init() {
 			}
 
 		case OpArgTypeVoterParamsField:
-			for name, spec := range logic.VoterParamsFieldSpecByName {
+			for name, spec := range logic.VoterParamsFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -144,7 +144,7 @@ func init() {
 				vals2[int(spec.Field())] = spec.FieldString()
 			}
 		case OpArgTypeMimcField:
-			for name, spec := range logic.MimcConfigSpecByName {
+			for name, spec := range logic.MimcConfigSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -155,7 +155,7 @@ func init() {
 			}
 
 		case OpArgTypeAssetHoldingField:
-			for name, spec := range logic.AssetHoldingFieldSpecByName {
+			for name, spec := range logic.AssetHoldingFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -166,7 +166,7 @@ func init() {
 			}
 
 		case OpArgTypeAssetParamsField:
-			for name, spec := range logic.AssetParamsFieldSpecByName {
+			for name, spec := range logic.AssetParamsFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -177,7 +177,7 @@ func init() {
 			}
 
 		case OpArgTypeEcdsaCurve:
-			for name, spec := range logic.EcdsaCurveSpecByName {
+			for name, spec := range logic.EcdsaCurveSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -188,7 +188,7 @@ func init() {
 			}
 
 		case OpArgTypeGlobalField:
-			for name, spec := range logic.GlobalFieldSpecByName {
+			for name, spec := range logic.GlobalFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -199,7 +199,7 @@ func init() {
 			}
 
 		case OpArgTypeJSONRefField:
-			for name, spec := range logic.JsonRefSpecByName {
+			for name, spec := range logic.JsonRefSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -210,7 +210,7 @@ func init() {
 			}
 
 		case OpArgTypeVrfStandard:
-			for name, spec := range logic.VrfStandardSpecByName {
+			for name, spec := range logic.VrfStandardSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -221,7 +221,7 @@ func init() {
 			}
 
 		case OpArgTypeBase64EncodingField:
-			for name, spec := range logic.Base64EncodingSpecByName {
+			for name, spec := range logic.Base64EncodingSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -232,7 +232,7 @@ func init() {
 			}
 
 		case OpArgTypeEcGroupField:
-			for name, spec := range logic.EcGroupSpecByName {
+			for name, spec := range logic.EcGroupSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -243,7 +243,7 @@ func init() {
 			}
 
 		case OpArgTypeBlockField:
-			for name, spec := range logic.BlockFieldSpecByName {
+			for name, spec := range logic.BlockFieldSpecByName() {
 				vals = append(vals, opItemArgVal{
 					Value:   uint64(spec.Field()),
 					Name:    name,
@@ -3067,7 +3067,7 @@ func (r ProcessResult) ArgVals(arg opItemArg) []opItemArgVal {
 			})
 		}
 	case OpArgTypeConstInt:
-		for name, value := range logic.TxnTypeMap {
+		for name, value := range logic.TxnTypeMap() {
 			if value != 0 {
 				res = append(res, opItemArgVal{
 					Name:  name,
@@ -3075,7 +3075,7 @@ func (r ProcessResult) ArgVals(arg opItemArg) []opItemArgVal {
 				})
 			}
 		}
-		for name, value := range logic.OnCompletionMap {
+		for name, value := range logic.OnCompletionMap() {
 			res = append(res, opItemArgVal{
 				Name:  name,
 				Value: value,
@@ -3216,7 +3216,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 						arg := info.Args[idx]
 						switch arg.Type {
 						case OpArgTypeTxnaField:
-							spec, ok := logic.TxnFieldSpecByName[tok.String()]
+							spec, ok := logic.TxnFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3229,7 +3229,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeItxnField:
-							spec, ok := logic.TxnFieldSpecByName[tok.String()]
+							spec, ok := logic.TxnFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3242,7 +3242,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeTxnField:
-							spec, ok := logic.TxnFieldSpecByName[tok.String()]
+							spec, ok := logic.TxnFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3254,7 +3254,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 								}
 							}
 						case OpArgTypeAcctParamsField:
-							spec, ok := logic.AcctParamsFieldSpecByName[tok.String()]
+							spec, ok := logic.AcctParamsFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3266,7 +3266,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 								}
 							}
 						case OpArgTypeAppParamsField:
-							spec, ok := logic.AppParamsFieldSpecByName[tok.String()]
+							spec, ok := logic.AppParamsFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3279,7 +3279,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeVoterParamsField:
-							spec, ok := logic.VoterParamsFieldSpecByName[tok.String()]
+							spec, ok := logic.VoterParamsFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3292,7 +3292,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeMimcField:
-							spec, ok := logic.MimcConfigSpecByName[tok.String()]
+							spec, ok := logic.MimcConfigSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3305,7 +3305,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeAssetHoldingField:
-							spec, ok := logic.AssetHoldingFieldSpecByName[tok.String()]
+							spec, ok := logic.AssetHoldingFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3318,7 +3318,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeAssetParamsField:
-							spec, ok := logic.AssetParamsFieldSpecByName[tok.String()]
+							spec, ok := logic.AssetParamsFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3331,7 +3331,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeBase64EncodingField:
-							spec, ok := logic.Base64EncodingSpecByName[tok.String()]
+							spec, ok := logic.Base64EncodingSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3344,7 +3344,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeBlockField:
-							spec, ok := logic.BlockFieldSpecByName[tok.String()]
+							spec, ok := logic.BlockFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3357,7 +3357,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeEcdsaCurve:
-							spec, ok := logic.EcdsaCurveSpecByName[tok.String()]
+							spec, ok := logic.EcdsaCurveSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3370,7 +3370,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeGlobalField:
-							spec, ok := logic.GlobalFieldSpecByName[tok.String()]
+							spec, ok := logic.GlobalFieldSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3383,7 +3383,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeJSONRefField:
-							spec, ok := logic.JsonRefSpecByName[tok.String()]
+							spec, ok := logic.JsonRefSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}
@@ -3396,7 +3396,7 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 							}
 
 						case OpArgTypeVrfStandard:
-							spec, ok := logic.VrfStandardSpecByName[tok.String()]
+							spec, ok := logic.VrfStandardSpecByName()[tok.String()]
 							if ok {
 								return fmt.Sprintf("%s = %d\r\n%s", spec.FieldString(), spec.Field(), spec.Note())
 							}

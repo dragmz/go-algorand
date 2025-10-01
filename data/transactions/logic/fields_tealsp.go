@@ -101,47 +101,86 @@ func (fs voterParamsFieldSpec) FieldString() string {
 }
 
 var VoterParamsFieldSpecByField = voterParamsFieldSpecByField
-var VoterParamsFieldSpecByName = voterParamsFieldSpecByName
+
+func VoterParamsFieldSpecByName() map[string]voterParamsFieldSpec {
+	return voterParamsFieldSpecByName
+}
 
 var AcctParamsFieldSpecByField = acctParamsFieldSpecByField
-var AcctParamsFieldSpecByName = acctParamsFieldSpecByName
+
+func AcctParamsFieldSpecByName() map[string]acctParamsFieldSpec {
+	return acctParamsFieldSpecByName
+}
 
 var AppParamsFieldSpecByField = appParamsFieldSpecByField
-var AppParamsFieldSpecByName = appParamsFieldSpecByName
+
+func AppParamsFieldSpecByName() map[string]appParamsFieldSpec {
+	return appParamsFieldSpecByName
+}
 
 var AssetParamsFieldSpecByField = assetParamsFieldSpecByField
-var AssetParamsFieldSpecByName = assetParamsFieldSpecByName
+
+func AssetParamsFieldSpecByName() map[string]assetParamsFieldSpec {
+	return assetParamsFieldSpecByName
+}
 
 var AssetHoldingFieldSpecByField = assetHoldingFieldSpecByField
-var AssetHoldingFieldSpecByName = assetHoldingFieldSpecByName
+
+func AssetHoldingFieldSpecByName() map[string]assetHoldingFieldSpec {
+	return assetHoldingFieldSpecByName
+}
 
 var BlockFieldSpecByField = blockFieldSpecByField
-var BlockFieldSpecByName = blockFieldSpecByName
+
+func BlockFieldSpecByName() map[string]blockFieldSpec {
+	return blockFieldSpecByName
+}
 
 var VrfStandardSpecByField = vrfStandardSpecByField
-var VrfStandardSpecByName = vrfStandardSpecByName
+
+func VrfStandardSpecByName() map[string]vrfStandardSpec {
+	return vrfStandardSpecByName
+}
 
 var JsonRefSpecByField = jsonRefSpecByField
-var JsonRefSpecByName = jsonRefSpecByName
+
+func JsonRefSpecByName() map[string]jsonRefSpec {
+	return jsonRefSpecByName
+}
 
 var Base64EncodingSpecByField = base64EncodingSpecByField
-var Base64EncodingSpecByName = base64EncodingSpecByName
+
+func Base64EncodingSpecByName() map[string]base64EncodingSpec {
+	return base64EncodingSpecByName
+}
 
 var EcGroupSpecByField = ecGroupSpecByField
-var EcGroupSpecByName = ecGroupSpecByName
+
+func EcGroupSpecByName() map[string]ecGroupSpec {
+	return ecGroupSpecByName
+}
 
 var EcdsaCurveSpecByField = ecdsaCurveSpecByField
-var EcdsaCurveSpecByName = ecdsaCurveSpecByName
+
+func EcdsaCurveSpecByName() map[string]ecdsaCurveSpec {
+	return ecdsaCurveSpecByName
+}
 
 var GlobalFieldSpecByField = globalFieldSpecByField
-var GlobalFieldSpecByName = globalFieldSpecByName
+
+func GlobalFieldSpecByName() map[string]globalFieldSpec {
+	return globalFieldSpecByName
+}
 
 func (fs globalFieldSpec) Mode() RunMode {
 	return fs.mode
 }
 
 var TxnFieldSpecByField = txnFieldSpecByField
-var TxnFieldSpecByName = txnFieldSpecByName
+
+func TxnFieldSpecByName() map[string]txnFieldSpec {
+	return txnFieldSpecByName
+}
 
 func (fs txnFieldSpec) Array() bool {
 	return fs.array
@@ -156,7 +195,15 @@ func (fs txnFieldSpec) Effects() bool {
 }
 
 var MimcConfigSpecByField = mimcConfigSpecByField
-var MimcConfigSpecByName = mimcConfigSpecByName
 
-var TxnTypeMap = txnTypeMap
-var OnCompletionMap = onCompletionMap
+func MimcConfigSpecByName() map[string]mimcConfigSpec {
+	return mimcConfigSpecByName
+}
+
+func TxnTypeMap() map[string]uint64 {
+	return txnTypeMap
+}
+
+func OnCompletionMap() map[string]uint64 {
+	return onCompletionMap
+}

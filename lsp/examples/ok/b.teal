@@ -1,0 +1,10 @@
+#pragma version 4
+b app
+
+end:
+int 1
+retsub
+
+app:
+
+callsub end

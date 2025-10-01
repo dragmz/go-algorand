@@ -103,7 +103,7 @@ func readUint8(s string) (uint8, error) {
 }
 
 func readAssetHoldingField(v uint64, s string) (logic.AssetHoldingField, bool, error) {
-	spec, ok := logic.AssetHoldingFieldSpecByName[s]
+	spec, ok := logic.AssetHoldingFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -122,7 +122,7 @@ func readAssetHoldingField(v uint64, s string) (logic.AssetHoldingField, bool, e
 }
 
 func readVrfVerifyField(v uint64, s string) (logic.VrfStandard, bool, error) {
-	spec, ok := logic.VrfStandardSpecByName[s]
+	spec, ok := logic.VrfStandardSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -141,7 +141,7 @@ func readVrfVerifyField(v uint64, s string) (logic.VrfStandard, bool, error) {
 }
 
 func readBlockField(v uint64, s string) (logic.BlockField, bool, error) {
-	spec, ok := logic.BlockFieldSpecByName[s]
+	spec, ok := logic.BlockFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -160,7 +160,7 @@ func readBlockField(v uint64, s string) (logic.BlockField, bool, error) {
 }
 
 func readVoterParams(v uint64, s string) (logic.VoterParamsField, bool, error) {
-	spec, ok := logic.VoterParamsFieldSpecByName[s]
+	spec, ok := logic.VoterParamsFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -179,7 +179,7 @@ func readVoterParams(v uint64, s string) (logic.VoterParamsField, bool, error) {
 }
 
 func readMimcField(v uint64, s string) (logic.MimcConfig, bool, error) {
-	spec, ok := logic.MimcConfigSpecByName[s]
+	spec, ok := logic.MimcConfigSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -198,7 +198,7 @@ func readMimcField(v uint64, s string) (logic.MimcConfig, bool, error) {
 }
 
 func readVoterParamsField(v uint64, s string) (logic.VoterParamsField, bool, error) {
-	spec, ok := logic.VoterParamsFieldSpecByName[s]
+	spec, ok := logic.VoterParamsFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -217,7 +217,7 @@ func readVoterParamsField(v uint64, s string) (logic.VoterParamsField, bool, err
 }
 
 func readAcctParams(v uint64, s string) (logic.AcctParamsField, bool, error) {
-	spec, ok := logic.AcctParamsFieldSpecByName[s]
+	spec, ok := logic.AcctParamsFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -236,7 +236,7 @@ func readAcctParams(v uint64, s string) (logic.AcctParamsField, bool, error) {
 }
 
 func readAppParamsField(v uint64, s string) (logic.AppParamsField, bool, error) {
-	spec, ok := logic.AppParamsFieldSpecByName[s]
+	spec, ok := logic.AppParamsFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -255,7 +255,7 @@ func readAppParamsField(v uint64, s string) (logic.AppParamsField, bool, error) 
 }
 
 func readAssetParamsField(v uint64, s string) (logic.AssetParamsField, bool, error) {
-	spec, ok := logic.AssetParamsFieldSpecByName[s]
+	spec, ok := logic.AssetParamsFieldSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -274,7 +274,7 @@ func readAssetParamsField(v uint64, s string) (logic.AssetParamsField, bool, err
 }
 
 func readGlobalField(v uint64, s string, mode logic.RunMode) (logic.GlobalField, bool, error) {
-	spec, ok := logic.GlobalFieldSpecByName[s]
+	spec, ok := logic.GlobalFieldSpecByName()[s]
 	if ok {
 		if !spec.Mode().Any() {
 			if spec.Mode() != mode {
@@ -299,7 +299,7 @@ func readGlobalField(v uint64, s string, mode logic.RunMode) (logic.GlobalField,
 }
 
 func readEcGroupField(v uint64, s string) (logic.EcGroup, bool, error) {
-	spec, ok := logic.EcGroupSpecByName[s]
+	spec, ok := logic.EcGroupSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -318,7 +318,7 @@ func readEcGroupField(v uint64, s string) (logic.EcGroup, bool, error) {
 }
 
 func readBase64EncodingField(v uint64, s string) (logic.Base64Encoding, bool, error) {
-	spec, ok := logic.Base64EncodingSpecByName[s]
+	spec, ok := logic.Base64EncodingSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -337,7 +337,7 @@ func readBase64EncodingField(v uint64, s string) (logic.Base64Encoding, bool, er
 }
 
 func readJsonRefField(v uint64, s string) (logic.JSONRefType, bool, error) {
-	spec, ok := logic.JsonRefSpecByName[s]
+	spec, ok := logic.JsonRefSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
@@ -356,7 +356,7 @@ func readJsonRefField(v uint64, s string) (logic.JSONRefType, bool, error) {
 }
 
 func readTxnField(c fieldContext, v uint64, s string, m logic.RunMode) (logic.TxnField, bool, error) {
-	spec, ok := logic.TxnFieldSpecByName[s]
+	spec, ok := logic.TxnFieldSpecByName()[s]
 	if ok {
 		if spec.Effects() && m == logic.ModeSig {
 			return 0, true, errors.Errorf("not available in this mode (need: %s, got: %s)", logic.ModeApp, m)
@@ -405,12 +405,12 @@ func readInt(a *arguments) (uint64, error) {
 }
 
 func readConstInt(a *arguments) (uint64, error) {
-	i, ok := logic.TxnTypeMap[a.Text()]
+	i, ok := logic.TxnTypeMap()[a.Text()]
 	if ok {
 		return i, nil
 	}
 
-	oc, ok := logic.OnCompletionMap[a.Text()]
+	oc, ok := logic.OnCompletionMap()[a.Text()]
 	if ok {
 		return oc, nil
 	}
@@ -424,7 +424,7 @@ func readConstInt(a *arguments) (uint64, error) {
 }
 
 func readEcdsaCurveIndex(v uint64, s string) (logic.EcdsaCurve, bool, error) {
-	spec, ok := logic.EcdsaCurveSpecByName[s]
+	spec, ok := logic.EcdsaCurveSpecByName()[s]
 	if ok {
 		needed := spec.Version()
 		if needed > v {
