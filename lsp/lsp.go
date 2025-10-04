@@ -88,6 +88,9 @@ func New(r io.Reader, w io.Writer, opts ...LspOption) (*lsp, error) {
 			InlayNamed:     true,
 			InlayDecoded:   true,
 			LensRefs:       true,
+			ProgramSize:    true,
+			PcLens:         false,
+			PcInlay:        false,
 		},
 	}
 
@@ -314,6 +317,7 @@ type tealInitializationOptions struct {
 	LensRefs       *bool `json:"lensRefs,omitempty"`
 	PcLens         *bool `json:"pcLens,omitempty"`
 	PcInlay        *bool `json:"pcInlay,omitempty"`
+	ProgramSize    *bool `json:"programSize,omitempty"`
 }
 
 type tealConfig struct {
@@ -323,6 +327,7 @@ type tealConfig struct {
 	LensRefs       bool
 	PcLens         bool
 	PcInlay        bool
+	ProgramSize    bool
 }
 
 type lspCompletionCompletionItemClientCapabilities struct {
@@ -1996,23 +2001,25 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				}
 			}
 
-			if res.AssembleError == nil && res.OpStream != nil {
-				info := DiagInfo
+			if l.config.ProgramSize {
+				if res.AssembleError == nil && res.OpStream != nil {
+					info := DiagInfo
 
-				ds = append(ds, LspDiagnostic{
-					Range: LspRange{
-						Start: LspPosition{
-							Line:      0,
-							Character: 0,
+					ds = append(ds, LspDiagnostic{
+						Range: LspRange{
+							Start: LspPosition{
+								Line:      0,
+								Character: 0,
+							},
+							End: LspPosition{
+								Line:      0,
+								Character: 0,
+							},
 						},
-						End: LspPosition{
-							Line:      0,
-							Character: 0,
-						},
-					},
-					Severity: &info,
-					Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
-				})
+						Severity: &info,
+						Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
+					})
+				}
 			}
 
 			return l.success(h.Id, lspFullDocumentDiagnosticReport{
@@ -2147,6 +2154,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					}
 					if req.Params.InitializationOptions.PcLens != nil {
 						l.config.PcLens = *req.Params.InitializationOptions.PcLens
+					}
+					if req.Params.InitializationOptions.ProgramSize != nil {
+						l.config.ProgramSize = *req.Params.InitializationOptions.ProgramSize
 					}
 				}
 			}
