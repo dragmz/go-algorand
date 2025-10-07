@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"unicode/utf8"
+
 	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/stretchr/testify/assert"
 )
@@ -361,4 +363,27 @@ func TestStringDoesConflictWithDefine(t *testing.T) {
 	assert.Len(t, res.Strings, 1)
 	assert.Len(t, res.Symbols, 1)
 	assert.Empty(t, res.SymbolRefs)
+}
+
+func TestEmojiLabelAndBranch(t *testing.T) {
+	src := `👍👍:
+b 👍👍
+byte "👍👍"
+`
+
+	res := Process(src)
+
+	assert.Len(t, res.Symbols, 1)
+	sym := res.Symbols[0]
+	assert.Equal(t, "👍👍", sym.Name())
+
+	refs := res.SymRefByName("👍👍")
+	assert.Len(t, refs, 1)
+	assert.Equal(t, "👍👍", refs[0].String())
+
+	assert.Len(t, res.Strings, 1)
+	assert.Equal(t, "\"👍👍\"", res.Strings[0].String())
+
+	nameRunes := utf8.RuneCountInString(sym.Name())
+	assert.Equal(t, sym.Begin()+nameRunes+1, sym.End())
 }
