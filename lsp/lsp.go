@@ -801,7 +801,7 @@ type lspInitializeRequest lspRequest[*lspInitializeRequestParams]
 type lspCodeLensRequest lspRequest[*lspCodeLensRequestParams]
 
 func readInto(b []byte, v interface{}) error {
-	err := json.Unmarshal(b, &v)
+	err := json.Unmarshal(b, v)
 	if err != nil {
 		return err
 	}
@@ -1047,7 +1047,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					prepareVersionEdit(res.VersionToken, arg.Version),
 				}
 
-				return l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
+				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: "Update version",
 					Edit: lspWorkspaceEdit{
 						DocumentChanges: []lspTextDocumentEdit{
@@ -1060,6 +1060,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 					},
 				})
+
+				if err != nil {
+					return err
+				}
+
+				return l.success(h.Id, struct{}{})
 
 			case "teal.value.replace":
 				var body lspWorkspaceExecuteCommandBody[[]tealReplaceValueCommandArgs]
@@ -1087,7 +1093,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					},
 				}
 
-				return l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
+				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: "Replace with named value",
 					Edit: lspWorkspaceEdit{
 						DocumentChanges: []lspTextDocumentEdit{
@@ -1100,6 +1106,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 					},
 				})
+
+				if err != nil {
+					return err
+				}
+
+				return l.success(h.Id, struct{}{})
 			case "teal.call.remove":
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveCallCommandArgs]
 				err := readInto(b, &body)
@@ -1126,7 +1138,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				edits := []lspTextEdit{prepareRemoveSublineEdit(res, line, subline)}
 
-				return l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
+				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: "Remove call",
 					Edit: lspWorkspaceEdit{
 						DocumentChanges: []lspTextDocumentEdit{
@@ -1139,6 +1151,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 					},
 				})
+
+				if err != nil {
+					return err
+				}
+
+				return l.success(h.Id, struct{}{})
 			case "teal.label.remove":
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveLabelCommandArgs]
 				err := readInto(b, &body)
@@ -1166,7 +1184,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					edits = append(edits, prepareRemoveSymbolEdit(sym))
 				}
 
-				return l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
+				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: fmt.Sprintf("Remove label: %s", name),
 					Edit: lspWorkspaceEdit{
 						DocumentChanges: []lspTextDocumentEdit{
@@ -1179,6 +1197,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 					},
 				})
+
+				if err != nil {
+					return err
+				}
+
+				return l.success(h.Id, struct{}{})
 
 			case "teal.label.create":
 				var body lspWorkspaceExecuteCommandBody[[]tealCreateLabelCommandArgs]
@@ -1201,7 +1225,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				name := arg.Name
 
-				return l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
+				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: fmt.Sprintf("Create label: %s", name),
 					Edit: lspWorkspaceEdit{
 						DocumentChanges: []lspTextDocumentEdit{
@@ -1216,6 +1240,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 					},
 				})
+
+				if err != nil {
+					return err
+				}
+
+				return l.success(h.Id, struct{}{})
 
 			default:
 				return l.fail(h.Id, lspError{
