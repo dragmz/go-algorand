@@ -3553,7 +3553,8 @@ func Process(source string) *ProcessResult {
 
 				if strings.HasSuffix(c.args.Text(), ":") {
 					name := c.args.Text()
-					name = name[:len(name)-1]
+					// trim suffix safely (handles multi-byte runes like emoji)
+					name = strings.TrimSuffix(name, ":")
 					if len(name) == 0 {
 						c.failCurr(errors.New("missing label name"))
 						return

@@ -104,10 +104,14 @@ func (z *Lexer) inc(n int) {
 }
 
 func (z *Lexer) emit(t TokenType) {
+	// compute UTF-16 code-unit based begin/end positions relative to current line
+	bUnits := utf16Units(z.Source[z.lb:z.p])
+	eUnits := utf16Units(z.Source[z.lb:z.i])
+
 	z.ts = append(z.ts, Token{
 		l: z.l,
-		b: z.p - z.lb,
-		e: z.i - z.lb,
+		b: bUnits,
+		e: eUnits,
 
 		v: string(z.Source[z.p:z.i]),
 		t: t,
@@ -135,6 +139,32 @@ func isTerminating(c rune) bool {
 	}
 
 	return true
+}
+
+// utf16Units counts the number of UTF-16 code units in the provided
+// byte slice. This is used to produce LSP-friendly character offsets
+// (which are UTF-16 code-unit based) instead of byte or rune counts.
+func utf16Units(bs []byte) int {
+	cnt := 0
+	for len(bs) > 0 {
+		r, sz := utf8.DecodeRune(bs)
+		if r == utf8.RuneError && sz == 1 {
+			// invalid single byte sequence - treat as one unit
+			cnt++
+			bs = bs[sz:]
+			continue
+		}
+
+		if r > 0xFFFF {
+			cnt += 2
+		} else {
+			cnt++
+		}
+
+		bs = bs[sz:]
+	}
+
+	return cnt
 }
 
 type lexerError struct {
@@ -185,10 +215,14 @@ func (z *Lexer) readValue() {
 				s := string(z.Source[z.p+1 : z.i-1])
 				v := "\"" + strings.ReplaceAll(s, "\\\"", "\"") + "\""
 
+				// compute UTF-16 code-unit based begin/end positions for quoted string
+				bUnits := utf16Units(z.Source[z.lb:z.p])
+				eUnits := utf16Units(z.Source[z.lb:z.i])
+
 				z.ts = append(z.ts, Token{
 					l: z.l,
-					b: z.p - z.lb,
-					e: z.i - z.lb,
+					b: bUnits,
+					e: eUnits,
 
 					v: v,
 					t: TokenValue,
@@ -245,10 +279,14 @@ func (z *Lexer) readComment() {
 				return
 			}
 
+			// compute UTF-16 code-unit based begin/end positions for comment
+			bUnits := utf16Units(z.Source[z.lb:z.p])
+			eUnits := utf16Units(z.Source[z.lb:z.i])
+
 			z.ts = append(z.ts, Token{
 				l: z.l,
-				b: z.p - z.lb,
-				e: z.i - z.lb,
+				b: bUnits,
+				e: eUnits,
 
 				v: string(z.Source[z.p+2 : z.i]),
 				t: TokenComment,
@@ -266,10 +304,14 @@ func (z *Lexer) readComment() {
 			}
 		} else {
 			if c == '\r' || c == '\n' {
+				// compute UTF-16 code-unit based begin/end positions for comment
+				bUnits := utf16Units(z.Source[z.lb:z.p])
+				eUnits := utf16Units(z.Source[z.lb:z.i])
+
 				z.ts = append(z.ts, Token{
 					l: z.l,
-					b: z.p - z.lb,
-					e: z.i - z.lb,
+					b: bUnits,
+					e: eUnits,
 
 					v: string(z.Source[z.p+2 : z.i]),
 					t: TokenComment,

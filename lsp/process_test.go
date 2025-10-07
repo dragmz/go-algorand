@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"testing"
 
-	"unicode/utf8"
-
 	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/stretchr/testify/assert"
 )
@@ -364,26 +362,48 @@ func TestStringDoesConflictWithDefine(t *testing.T) {
 	assert.Len(t, res.Symbols, 1)
 	assert.Empty(t, res.SymbolRefs)
 }
-
 func TestEmojiLabelAndBranch(t *testing.T) {
-	src := `👍👍:
-b 👍👍
-byte "👍👍"
-`
+	emojiCases := []string{
+		"👍",
+		"👍👍",
+		"👋👋",
+		"🤝",
+		"🧑🏽‍🔧",      // person with skin tone + ZWJ
+		"👩‍👩‍👧‍👦", // family (ZWJ sequence)
+		"🏳️‍🌈",      // flag (ZWJ + VS16)
+		"🇺🇸",        // regional indicator pair (flag)
+	}
 
-	res := Process(src)
+	for _, name := range emojiCases {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			src := name + ":\n" + "b " + name + "\n" + "byte \"" + name + "\"\n"
 
-	assert.Len(t, res.Symbols, 1)
-	sym := res.Symbols[0]
-	assert.Equal(t, "👍👍", sym.Name())
+			res := Process(src)
 
-	refs := res.SymRefByName("👍👍")
-	assert.Len(t, refs, 1)
-	assert.Equal(t, "👍👍", refs[0].String())
+			// symbol detected
+			if !assert.Len(t, res.Symbols, 1) {
+				return
+			}
+			sym := res.Symbols[0]
+			assert.Equal(t, name, sym.Name())
 
-	assert.Len(t, res.Strings, 1)
-	assert.Equal(t, "\"👍👍\"", res.Strings[0].String())
+			// branch reference detected
+			refs := res.SymRefByName(name)
+			if !assert.Len(t, refs, 1) {
+				return
+			}
+			assert.Equal(t, name, refs[0].String())
 
-	nameRunes := utf8.RuneCountInString(sym.Name())
-	assert.Equal(t, sym.Begin()+nameRunes+1, sym.End())
+			// string token captured separately
+			if !assert.Len(t, res.Strings, 1) {
+				return
+			}
+			assert.Equal(t, "\""+name+"\"", res.Strings[0].String())
+
+			// positions: token end should be begin + name units + trailing ':'
+			nameUnits := utf16LenString(sym.Name())
+			assert.Equal(t, sym.Begin()+nameUnits+1, sym.End())
+		})
+	}
 }

@@ -983,7 +983,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "workspace/executeCommand":
 			req, err := read[lspWorkspaceExecuteCommand](b)
 			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to parse request: %v", err),
+				})
 			}
 
 			switch req.Params.Command {
@@ -991,16 +994,25 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[tealGotoPcCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
 				}
 
 				_, res, err := l.prepare(body.Params.Arguments.Uri)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to prepare document: %v", err),
+					})
 				}
 
 				if res.AssembleError != nil {
-					return l.fail(h.Id, res.AssembleError)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to assemble document: %v", res.AssembleError),
+					})
 				}
 
 				if res.OpStream == nil || res.OpStream.OffsetToSource == nil {
@@ -1026,19 +1038,28 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealUpdateVersion]
 				err := readInto(b, &body)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return l.fail(h.Id, errors.New("unexpected number of args"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("unexpected number of args").Error(),
+					})
 				}
 
 				arg := args[0]
 
 				doc := l.docs[arg.Uri]
 				if doc == nil {
-					return l.fail(h.Id, errors.New("doc not found"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("doc not found").Error(),
+					})
 				}
 
 				res := doc.Results()
@@ -1062,7 +1083,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to apply edit: %v", err),
+					})
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1071,19 +1095,28 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealReplaceValueCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return l.fail(h.Id, errors.New("unexpected number of args"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("unexpected number of args").Error(),
+					})
 				}
 
 				arg := args[0]
 
 				doc := l.docs[arg.Uri]
 				if doc == nil {
-					return l.fail(h.Id, errors.New("doc not found"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("doc not found").Error(),
+					})
 				}
 
 				edits := []lspTextEdit{
@@ -1108,7 +1141,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to apply edit: %v", err),
+					})
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1116,19 +1152,28 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveCallCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return l.fail(h.Id, errors.New("unexpected number of args"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("unexpected number of args").Error(),
+					})
 				}
 
 				arg := args[0]
 
 				doc := l.docs[arg.Uri]
 				if doc == nil {
-					return l.fail(h.Id, errors.New("doc not found"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("doc not found").Error(),
+					})
 				}
 
 				res := doc.Results()
@@ -1153,7 +1198,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to apply edit: %v", err),
+					})
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1161,19 +1209,28 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveLabelCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return l.fail(h.Id, errors.New("unexpected number of args"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("unexpected number of args").Error(),
+					})
 				}
 
 				arg := args[0]
 
 				_, res, err := l.prepare(arg.Uri)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to prepare document: %v", err),
+					})
 				}
 
 				name := arg.Name
@@ -1199,7 +1256,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to apply edit: %v", err),
+					})
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1208,19 +1268,28 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealCreateLabelCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return l.fail(h.Id, errors.New("unexpected number of args"))
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: errors.New("unexpected number of args").Error(),
+					})
 				}
 
 				arg := args[0]
 
 				_, res, err := l.prepare(arg.Uri)
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to prepare document: %v", err),
+					})
 				}
 
 				name := arg.Name
@@ -1242,7 +1311,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return l.fail(h.Id, err)
+					return l.fail(h.Id, lspError{
+						Code:    1,
+						Message: fmt.Sprintf("failed to apply edit: %v", err),
+					})
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1257,7 +1329,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/prepareRename":
 			req, err := read[lspPrepareRenameRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			err = l.reportProgressBegin(req.Params.WorkDoneToken, "Preparing Rename", "Checking symbol for rename")
@@ -1268,7 +1343,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				l.reportProgressEnd(req.Params.WorkDoneToken, "Prepare rename failed")
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to prepare document: %v", err),
+				})
 			}
 
 			symbols := res.SymbolsWithin(req.Params.Position)
@@ -1288,7 +1366,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 						End: LspPosition{
 							Line:      sym.Line(),
-							Character: sym.Begin() + len(sym.Name()),
+							Character: sym.Begin() + utf16LenString(sym.Name()),
 						},
 					},
 					Placeholder: sym.Name(),
@@ -1306,7 +1384,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						},
 						End: LspPosition{
 							Line:      ref.Line(),
-							Character: ref.Begin() + len(ref.String()),
+							Character: ref.Begin() + utf16LenString(ref.String()),
 						},
 					},
 					Placeholder: ref.String(),
@@ -1323,7 +1401,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/rename":
 			req, err := read[lspRenameRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			err = l.reportProgressBegin(req.Params.WorkDoneToken, "Renaming Symbol", fmt.Sprintf("Renaming to '%s'", req.Params.NewName))
@@ -1334,7 +1415,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				l.reportProgressEnd(req.Params.WorkDoneToken, "Rename failed")
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to prepare document: %v", err),
+				})
 			}
 
 			chs := []lspTextEdit{}
@@ -1374,70 +1458,70 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/inlineValue":
 			req, err := read[lspInlineValueRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, _, err = l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			ls := []lspInlineValueText{}
+			l.prepare(req.Params.TextDocument.Uri)
 
 			return l.success(h.Id, ls)
 
 		case "textDocument/codeLens":
 			req, err := read[lspCodeLensRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			var cls []LspCodeLens
 
-			if l.config.LensRefs {
-				for _, sym := range res.Symbols {
-					count := res.RefCounts[sym.Name()]
-					if count > 0 {
-						cls = append(cls, LspCodeLens{
-							Range: LspRange{
-								Start: LspPosition{
-									Line: sym.StartLine(),
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				if l.config.LensRefs {
+					for _, sym := range res.Symbols {
+						count := res.RefCounts[sym.Name()]
+						if count > 0 {
+							cls = append(cls, LspCodeLens{
+								Range: LspRange{
+									Start: LspPosition{
+										Line: sym.StartLine(),
+									},
+									End: LspPosition{
+										Line: sym.EndLine(),
+									},
 								},
-								End: LspPosition{
-									Line: sym.EndLine(),
+								Command: &LspCommand{
+									Title: fmt.Sprintf("refs: %d", count),
 								},
-							},
-							Command: &LspCommand{
-								Title: fmt.Sprintf("refs: %d", count),
-							},
-						})
+							})
+						}
 					}
 				}
-			}
 
-			if l.config.PcLens {
-				if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
-					for pc, loc := range res.OpStream.OffsetToSource {
-						cls = append(cls, LspCodeLens{
-							Range: LspRange{
-								Start: LspPosition{
-									Line:      loc.Line,
-									Character: loc.Column,
+				if l.config.PcLens {
+					if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
+						for pc, loc := range res.OpStream.OffsetToSource {
+							cls = append(cls, LspCodeLens{
+								Range: LspRange{
+									Start: LspPosition{
+										Line:      loc.Line,
+										Character: loc.Column,
+									},
+									End: LspPosition{
+										Line:      loc.Line,
+										Character: loc.Column,
+									},
 								},
-								End: LspPosition{
-									Line:      loc.Line,
-									Character: loc.Column,
+								Command: &LspCommand{
+									Title: fmt.Sprintf("pc: %d", pc),
 								},
-							},
-							Command: &LspCommand{
-								Title: fmt.Sprintf("pc: %d", pc),
-							},
-						})
+							})
+						}
 					}
 				}
 			}
@@ -1447,222 +1531,224 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/inlayHint":
 			req, err := read[lspInlayHintRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			ihs := []LspInlayHint{}
-			parameter := new(int)
-			*parameter = 2
 
-			padding := new(bool)
-			*padding = true
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				parameter := new(int)
+				*parameter = 2
 
-			hs := res.InlayHints(req.Params.Range)
+				padding := new(bool)
+				*padding = true
 
-			if l.config.InlayNamed {
-				for _, named := range hs.Named {
-					ihs = append(ihs, LspInlayHint{
-						Position: LspPosition{
-							Line:      named.T.Line(),
-							Character: named.T.End(),
-						},
-						Label:       named.Name,
-						Kind:        parameter,
-						PaddingLeft: padding,
-					})
-				}
-			}
+				hs := res.InlayHints(req.Params.Range)
 
-			if l.config.InlayDecoded {
-				for _, decoded := range hs.Decoded {
-					ihs = append(ihs, LspInlayHint{
-						Position: LspPosition{
-							Line:      decoded.T.Line(),
-							Character: decoded.T.End(),
-						},
-						Label:       decoded.Value,
-						Kind:        parameter,
-						PaddingLeft: padding,
-					})
-
-				}
-			}
-
-			if l.config.PcInlay {
-				if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
-					for pc, loc := range res.OpStream.OffsetToSource {
+				if l.config.InlayNamed {
+					for _, named := range hs.Named {
 						ihs = append(ihs, LspInlayHint{
 							Position: LspPosition{
-								Line:      loc.Line,
-								Character: loc.Column,
+								Line:      named.T.Line(),
+								Character: named.T.End(),
 							},
-							Label: fmt.Sprintf("pc: %d", pc),
-							Kind:  parameter,
+							Label:       named.Name,
+							Kind:        parameter,
+							PaddingLeft: padding,
 						})
 					}
 				}
-			}
 
+				if l.config.InlayDecoded {
+					for _, decoded := range hs.Decoded {
+						ihs = append(ihs, LspInlayHint{
+							Position: LspPosition{
+								Line:      decoded.T.Line(),
+								Character: decoded.T.End(),
+							},
+							Label:       decoded.Value,
+							Kind:        parameter,
+							PaddingLeft: padding,
+						})
+
+					}
+				}
+
+				if l.config.PcInlay {
+					if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
+						for pc, loc := range res.OpStream.OffsetToSource {
+							ihs = append(ihs, LspInlayHint{
+								Position: LspPosition{
+									Line:      loc.Line,
+									Character: loc.Column,
+								},
+								Label: fmt.Sprintf("pc: %d", pc),
+								Kind:  parameter,
+							})
+						}
+					}
+				}
+			}
 			return l.success(h.Id, ihs)
 
 		case "textDocument/completion":
 			req, err := read[lspCompletionRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			var ln Line
-			if len(res.Lines) > req.Params.Position.Line {
-				ln = res.Lines[req.Params.Position.Line]
-			}
-
-			sln := ln.SublineByIndex(req.Params.Position.Character)
-
 			ccs := []lspCompletionItem{}
 
-			var prefix string
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				var ln Line
 
-			mode := tealCompletionArg
-
-			if len(sln.Tokens) == 0 {
-				mode = tealCompletionOp
-			} else {
-				if len(sln.Tokens) > 0 {
-					if req.Params.Position.Character <= sln.Tokens[0].End() {
-						mode = tealCompletionOp
-						prefix = sln.Tokens[0].String()
-					}
+				if len(res.Lines) > req.Params.Position.Line {
+					ln = res.Lines[req.Params.Position.Line]
 				}
-			}
 
-			switch mode {
-			case tealCompletionArg:
-				for _, v := range res.ArgValsAt(req.Params.Position.Line, req.Params.Position.Character) {
-					var d *lspCompletionItemLabelDetails
-					if !v.NoValue {
-						d = &lspCompletionItemLabelDetails{
-							Detail: fmt.Sprintf(" = %d", v.Value),
-						}
-					} else if v.Signature != "" {
-						d = &lspCompletionItemLabelDetails{
-							Detail: fmt.Sprintf(" %s", v.Signature),
+				sln := ln.SublineByIndex(req.Params.Position.Character)
+
+				var prefix string
+
+				mode := tealCompletionArg
+
+				if len(sln.Tokens) == 0 {
+					mode = tealCompletionOp
+				} else {
+					if len(sln.Tokens) > 0 {
+						if req.Params.Position.Character <= sln.Tokens[0].End() {
+							mode = tealCompletionOp
+							prefix = sln.Tokens[0].String()
 						}
 					}
+				}
+
+				switch mode {
+				case tealCompletionArg:
+					for _, v := range res.ArgValsAt(req.Params.Position.Line, req.Params.Position.Character) {
+						var d *lspCompletionItemLabelDetails
+						if !v.NoValue {
+							d = &lspCompletionItemLabelDetails{
+								Detail: fmt.Sprintf(" = %d", v.Value),
+							}
+						} else if v.Signature != "" {
+							d = &lspCompletionItemLabelDetails{
+								Detail: fmt.Sprintf(" %s", v.Signature),
+							}
+						}
+						ccs = append(ccs, lspCompletionItem{
+							LabelDetails: d,
+							Label:        v.Name,
+							Documentation: lspMarkupContent{
+								Kind:  "markdown",
+								Value: v.Docs,
+							},
+						})
+					}
+
+				case tealCompletionOp:
+					operator := new(int)
+					*operator = 25
+
+					snippet := 15
+
+					snippetFormat := new(int)
+					*snippetFormat = 2
+
+					var at string
+					var bt string
+					for i, name := range logic.OnCompletionNames {
+						if i > 0 {
+							at += " "
+						}
+
+						field := fmt.Sprintf("${%d:%s}", i+1, strings.ToLower(name))
+
+						at += field
+						bt += fmt.Sprintf("%s:\n", field)
+
+						if i < len(logic.OnCompletionNames)-1 {
+							bt += fmt.Sprintf("b ${%d:then}\n", len(logic.OnCompletionNames)+2)
+						}
+
+						bt += "\n"
+					}
+
+					bt += fmt.Sprintf("${%d:then}:\n$%d", len(logic.OnCompletionNames)+2, len(logic.OnCompletionNames)+3)
+
 					ccs = append(ccs, lspCompletionItem{
-						LabelDetails: d,
-						Label:        v.Name,
-						Documentation: lspMarkupContent{
-							Kind:  "markdown",
-							Value: v.Docs,
-						},
+						Label:            "soc",
+						Kind:             &snippet,
+						Detail:           "switch on OnCompletion",
+						InsertText:       fmt.Sprintf("txn OnCompletion\nswitch %s\n%s", at, bt),
+						InsertTextFormat: snippetFormat,
 					})
-				}
 
-			case tealCompletionOp:
-				operator := new(int)
-				*operator = 25
-
-				snippet := 15
-
-				snippetFormat := new(int)
-				*snippetFormat = 2
-
-				var at string
-				var bt string
-				for i, name := range logic.OnCompletionNames {
-					if i > 0 {
-						at += " "
-					}
-
-					field := fmt.Sprintf("${%d:%s}", i+1, strings.ToLower(name))
-
-					at += field
-					bt += fmt.Sprintf("%s:\n", field)
-
-					if i < len(logic.OnCompletionNames)-1 {
-						bt += fmt.Sprintf("b ${%d:then}\n", len(logic.OnCompletionNames)+2)
-					}
-
-					bt += "\n"
-				}
-
-				bt += fmt.Sprintf("${%d:then}:\n$%d", len(logic.OnCompletionNames)+2, len(logic.OnCompletionNames)+3)
-
-				ccs = append(ccs, lspCompletionItem{
-					Label:            "soc",
-					Kind:             &snippet,
-					Detail:           "switch on OnCompletion",
-					InsertText:       fmt.Sprintf("txn OnCompletion\nswitch %s\n%s", at, bt),
-					InsertTextFormat: snippetFormat,
-				})
-
-				ccs = append(ccs, lspCompletionItem{
-					Label:            "func",
-					Kind:             &snippet,
-					Detail:           "create subroutine",
-					InsertText:       "${1:sub}:\r\n\r\n\tproto ${2:0} ${3:0}\r\n\t${4}\r\n\tretsub\r\n",
-					InsertTextFormat: snippetFormat,
-				})
-
-				for name := range res.Defines {
 					ccs = append(ccs, lspCompletionItem{
-						Label:      name,
-						Kind:       operator,
-						InsertText: name,
+						Label:            "func",
+						Kind:             &snippet,
+						Detail:           "create subroutine",
+						InsertText:       "${1:sub}:\r\n\r\n\tproto ${2:0} ${3:0}\r\n\t${4}\r\n\tretsub\r\n",
+						InsertTextFormat: snippetFormat,
 					})
-				}
 
-				for _, info := range res.AvailableOps() {
-					if !strings.HasPrefix(info.Name, prefix) {
-						continue
+					for name := range res.Defines {
+						ccs = append(ccs, lspCompletionItem{
+							Label:      name,
+							Kind:       operator,
+							InsertText: name,
+						})
 					}
 
-					var insert string
-					var format *int
-					if len(info.Args) > 0 {
-						var placeholders string
-						for i, arg := range info.Args {
-							if i > 0 {
-								placeholders += " "
+					for _, info := range res.AvailableOps() {
+						if !strings.HasPrefix(info.Name, prefix) {
+							continue
+						}
+
+						var insert string
+						var format *int
+						if len(info.Args) > 0 {
+							var placeholders string
+							for i, arg := range info.Args {
+								if i > 0 {
+									placeholders += " "
+								}
+
+								placeholders += fmt.Sprintf("${%d:%s}", i+1, arg.Name)
 							}
 
-							placeholders += fmt.Sprintf("${%d:%s}", i+1, arg.Name)
+							insert = fmt.Sprintf("%s %s", info.Name, placeholders)
+							format = snippetFormat
+						} else {
+							insert = ""
+							format = nil
 						}
 
-						insert = fmt.Sprintf("%s %s", info.Name, placeholders)
-						format = snippetFormat
-					} else {
-						insert = ""
-						format = nil
+						doc := logic.OpDoc(info.Name)
+
+						ld := fmt.Sprintf("v%d", info.AppVersion)
+						ccs = append(ccs, lspCompletionItem{
+							Label: info.Name,
+							Documentation: lspMarkupContent{
+								Kind:  "markdown",
+								Value: doc,
+							},
+							Kind:             operator,
+							InsertText:       insert,
+							InsertTextFormat: format,
+							LabelDetails: &lspCompletionItemLabelDetails{
+								Description: ld,
+								Detail:      " " + info.ArgsSig,
+							},
+						})
 					}
-
-					doc := logic.OpDoc(info.Name)
-
-					ld := fmt.Sprintf("v%d", info.AppVersion)
-					ccs = append(ccs, lspCompletionItem{
-						Label: info.Name,
-						Documentation: lspMarkupContent{
-							Kind:  "markdown",
-							Value: doc,
-						},
-						Kind:             operator,
-						InsertText:       insert,
-						InsertTextFormat: format,
-						LabelDetails: &lspCompletionItemLabelDetails{
-							Description: ld,
-							Detail:      " " + info.ArgsSig,
-						},
-					})
 				}
 			}
 
@@ -1677,23 +1763,24 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/hover":
 			req, err := read[lspHoverRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			var c interface{} = struct{}{}
 
-			s := res.DocAt(req.Params.Position.Line, req.Params.Position.Character, logic.OpDoc, logic.OpDocExtra)
-			if s != "" {
-				c = lspHover{
-					Contents: lspMarkupContent{
-						Kind:  "plaintext",
-						Value: s,
-					},
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				s := res.DocAt(req.Params.Position.Line, req.Params.Position.Character, logic.OpDoc, logic.OpDocExtra)
+				if s != "" {
+					c = lspHover{
+						Contents: lspMarkupContent{
+							Kind:  "plaintext",
+							Value: s,
+						},
+					}
 				}
 			}
 
@@ -1702,30 +1789,31 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/definition":
 			req, err := read[lspDefinitionRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			ls := []lspLocation{}
 
-			for _, sym := range res.SymbolsForRefWithin(req.Params.Position) {
-				ls = append(ls, lspLocation{
-					Uri: req.Params.TextDocument.Uri,
-					Range: LspRange{
-						Start: LspPosition{
-							Line:      sym.Line(),
-							Character: sym.Begin(),
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				for _, sym := range res.SymbolsForRefWithin(req.Params.Position) {
+					ls = append(ls, lspLocation{
+						Uri: req.Params.TextDocument.Uri,
+						Range: LspRange{
+							Start: LspPosition{
+								Line:      sym.Line(),
+								Character: sym.Begin(),
+							},
+							End: LspPosition{
+								Line:      sym.Line(),
+								Character: sym.Begin() + utf16LenString(sym.Name()),
+							},
 						},
-						End: LspPosition{
-							Line:      sym.Line(),
-							Character: sym.Begin() + len(sym.Name()),
-						},
-					},
-				})
+					})
+				}
 			}
 
 			return l.success(h.Id, ls)
@@ -1733,74 +1821,80 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/formatting":
 			req, err := read[lspDocumentFormattingRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
+
+			var te []lspTextEdit
 
 			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+			if err == nil {
+				// TODO: implement formatting
+				formatted := doc.s
+				te = []lspTextEdit{prepareReplaceAllTextEdit(len(res.Lines), formatted)}
 			}
 
-			// TODO: implement formatting
-			formatted := doc.s
-
-			return l.success(h.Id, []lspTextEdit{prepareReplaceAllTextEdit(len(res.Lines), formatted)})
+			return l.success(h.Id, te)
 
 		case "textDocument/signatureHelp":
 			req, err := read[lspSignatureHelpRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			var sh interface{} = struct{}{}
-			for _, op := range res.Ops {
-				if op.Line() == req.Params.Position.Line {
-					info, ok := Ops.Get(OpContext{
-						Name:    op.String(),
-						Version: res.Version,
-					})
-					if ok {
-						_, idx, _ := res.ArgAt(req.Params.Position.Line, req.Params.Position.Character)
 
-						active := new(int)
-						*active = idx
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				for _, op := range res.Ops {
+					if op.Line() == req.Params.Position.Line {
+						info, ok := Ops.Get(OpContext{
+							Name:    op.String(),
+							Version: res.Version,
+						})
+						if ok {
+							_, idx, _ := res.ArgAt(req.Params.Position.Line, req.Params.Position.Character)
 
-						var doc interface{}
+							active := new(int)
+							*active = idx
 
-						fullDoc := MakeFullDoc(logic.OpDoc(info.Name), logic.OpDocExtra(info.Name))
+							var doc interface{}
 
-						if fullDoc != "" {
-							doc = lspMarkupContent{
-								Kind:  "markdown",
-								Value: fullDoc,
+							fullDoc := MakeFullDoc(logic.OpDoc(info.Name), logic.OpDocExtra(info.Name))
+
+							if fullDoc != "" {
+								doc = lspMarkupContent{
+									Kind:  "markdown",
+									Value: fullDoc,
+								}
+							}
+
+							ps := []lspParameterInformation{}
+
+							for _, arg := range info.Args {
+								ps = append(ps, lspParameterInformation{
+									Label: arg.Name,
+								})
+							}
+
+							sh = &lspSignatureHelp{
+								Signatures: []lspSignatureInformation{
+									{
+										Label:           info.FullSig,
+										Documentation:   doc,
+										Parameters:      ps,
+										ActiveParameter: active,
+									},
+								},
 							}
 						}
-
-						ps := []lspParameterInformation{}
-
-						for _, arg := range info.Args {
-							ps = append(ps, lspParameterInformation{
-								Label: arg.Name,
-							})
-						}
-
-						sh = &lspSignatureHelp{
-							Signatures: []lspSignatureInformation{
-								{
-									Label:           info.FullSig,
-									Documentation:   doc,
-									Parameters:      ps,
-									ActiveParameter: active,
-								},
-							},
-						}
+						break
 					}
-					break
 				}
 			}
 
@@ -1809,238 +1903,247 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/codeAction":
 			req, err := read[lspCodeActionRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read request body: %v", err),
+				})
 			}
 
 			cas := []lspCodeAction{}
 
-			for _, red := range res.Redundants {
-				if req.Params.Range.Start.Line <= red.Line() && req.Params.Range.End.Line >= red.Line() {
-					kind := "quickfix"
-					title := red.String()
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				for _, red := range res.Redundants {
+					if req.Params.Range.Start.Line <= red.Line() && req.Params.Range.End.Line >= red.Line() {
+						kind := "quickfix"
+						title := red.String()
 
-					cas = append(cas, lspCodeAction{
-						Title: title,
-						Kind:  &kind,
-						Command: &LspCommand{
-							Title:   title,
-							Command: "teal.call.remove",
-							Arguments: []interface{}{
-								tealRemoveCallCommandArgs{
-									Uri:     req.Params.TextDocument.Uri,
-									Line:    red.Line(),
-									Subline: red.Subline(),
-								},
-							},
-						},
-					})
-				}
-			}
-
-			for _, ref := range res.MissRefs {
-				if !Overlaps(req.Params.Range, ref) {
-					continue
-				}
-
-				kind := "quickfix"
-				cas = append(cas, lspCodeAction{
-					Title: fmt.Sprintf("Create label '%s'", ref.String()),
-					Kind:  &kind,
-					Command: &LspCommand{
-						Title:   "Create label",
-						Command: "teal.label.create",
-						Arguments: []interface{}{
-							tealCreateLabelCommandArgs{
-								Uri:  req.Params.TextDocument.Uri,
-								Name: ref.String(),
-							},
-						},
-					},
-				})
-			}
-
-			hs := res.InlayHints(req.Params.Range)
-
-			for _, named := range hs.Named {
-				kind := "quickfix"
-				cas = append(cas, lspCodeAction{
-					Title: fmt.Sprintf("Replace with '%s'", named.Name),
-					Kind:  &kind,
-					Command: &LspCommand{
-						Title:   "Replace with named const",
-						Command: "teal.value.replace",
-						Arguments: []interface{}{
-							tealReplaceValueCommandArgs{
-								Uri: req.Params.TextDocument.Uri,
-								Range: LspRange{
-									Start: LspPosition{
-										Line:      named.T.Line(),
-										Character: named.T.Begin(),
-									},
-									End: LspPosition{
-										Line:      named.T.Line(),
-										Character: named.T.End(),
-									},
-								},
-								Value: named.Name,
-							},
-						},
-					},
-				})
-			}
-
-			for _, named := range hs.Decoded {
-				kind := "quickfix"
-				cas = append(cas, lspCodeAction{
-					Title: fmt.Sprintf("Replace with literal '%s'", named.Value),
-					Kind:  &kind,
-					Command: &LspCommand{
-						Title:   "Replace with literal",
-						Command: "teal.value.replace",
-						Arguments: []interface{}{
-							tealReplaceValueCommandArgs{
-								Uri: req.Params.TextDocument.Uri,
-								Range: LspRange{
-									Start: LspPosition{
-										Line:      named.T.Line(),
-										Character: named.T.Begin(),
-									},
-									End: LspPosition{
-										Line:      named.T.Line(),
-										Character: named.T.End(),
-									},
-								},
-								Value: fmt.Sprintf("\"%s\"", strings.ReplaceAll(named.Value, "\"", "\\\"")),
-							},
-						},
-					},
-				})
-			}
-
-			{
-				kind := "quickfix"
-				for _, v := range res.Versions {
-					if Overlaps(req.Params.Range, v) {
 						cas = append(cas, lspCodeAction{
-							Title: fmt.Sprintf("Update version to %d", v.Version),
+							Title: title,
 							Kind:  &kind,
 							Command: &LspCommand{
-								Title:   "Update version",
-								Command: "teal.version.update",
+								Title:   title,
+								Command: "teal.call.remove",
 								Arguments: []interface{}{
-									tealUpdateVersion{
+									tealRemoveCallCommandArgs{
 										Uri:     req.Params.TextDocument.Uri,
-										Version: v.Version,
+										Line:    red.Line(),
+										Subline: red.Subline(),
 									},
 								},
 							},
 						})
 					}
 				}
+
+				for _, ref := range res.MissRefs {
+					if !Overlaps(req.Params.Range, ref) {
+						continue
+					}
+
+					kind := "quickfix"
+					cas = append(cas, lspCodeAction{
+						Title: fmt.Sprintf("Create label '%s'", ref.String()),
+						Kind:  &kind,
+						Command: &LspCommand{
+							Title:   "Create label",
+							Command: "teal.label.create",
+							Arguments: []interface{}{
+								tealCreateLabelCommandArgs{
+									Uri:  req.Params.TextDocument.Uri,
+									Name: ref.String(),
+								},
+							},
+						},
+					})
+				}
+
+				hs := res.InlayHints(req.Params.Range)
+
+				for _, named := range hs.Named {
+					kind := "quickfix"
+					cas = append(cas, lspCodeAction{
+						Title: fmt.Sprintf("Replace with '%s'", named.Name),
+						Kind:  &kind,
+						Command: &LspCommand{
+							Title:   "Replace with named const",
+							Command: "teal.value.replace",
+							Arguments: []interface{}{
+								tealReplaceValueCommandArgs{
+									Uri: req.Params.TextDocument.Uri,
+									Range: LspRange{
+										Start: LspPosition{
+											Line:      named.T.Line(),
+											Character: named.T.Begin(),
+										},
+										End: LspPosition{
+											Line:      named.T.Line(),
+											Character: named.T.End(),
+										},
+									},
+									Value: named.Name,
+								},
+							},
+						},
+					})
+				}
+
+				for _, named := range hs.Decoded {
+					kind := "quickfix"
+					cas = append(cas, lspCodeAction{
+						Title: fmt.Sprintf("Replace with literal '%s'", named.Value),
+						Kind:  &kind,
+						Command: &LspCommand{
+							Title:   "Replace with literal",
+							Command: "teal.value.replace",
+							Arguments: []interface{}{
+								tealReplaceValueCommandArgs{
+									Uri: req.Params.TextDocument.Uri,
+									Range: LspRange{
+										Start: LspPosition{
+											Line:      named.T.Line(),
+											Character: named.T.Begin(),
+										},
+										End: LspPosition{
+											Line:      named.T.Line(),
+											Character: named.T.End(),
+										},
+									},
+									Value: fmt.Sprintf("\"%s\"", strings.ReplaceAll(named.Value, "\"", "\\\"")),
+								},
+							},
+						},
+					})
+				}
+
+				{
+					kind := "quickfix"
+					for _, v := range res.Versions {
+						if Overlaps(req.Params.Range, v) {
+							cas = append(cas, lspCodeAction{
+								Title: fmt.Sprintf("Update version to %d", v.Version),
+								Kind:  &kind,
+								Command: &LspCommand{
+									Title:   "Update version",
+									Command: "teal.version.update",
+									Arguments: []interface{}{
+										tealUpdateVersion{
+											Uri:     req.Params.TextDocument.Uri,
+											Version: v.Version,
+										},
+									},
+								},
+							})
+						}
+					}
+				}
 			}
+
 			return l.success(h.Id, cas)
 		case "textDocument/diagnostic":
 			req, err := read[lspDiagnosticRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read diagnostic request: %s", err),
+				})
 			}
 
 			ds := []LspDiagnostic{}
 
-			if res.AssembleError != nil {
-				ds = append(ds, LspDiagnostic{
-					Range: LspRange{
-						Start: LspPosition{
-							Line:      0,
-							Character: 0,
-						},
-						End: LspPosition{
-							Line:      0,
-							Character: 0,
-						},
-					},
-					Severity: func() *int { sev := DiagErr; return &sev }(),
-					Message:  res.AssembleError.Error(),
-				})
-			}
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				errored := false
 
-			if res.OpStream != nil {
-				for _, e := range res.OpStream.Errors {
-					l := e.Line
-					c := e.Column
+				if res.OpStream != nil {
+					for _, e := range res.OpStream.Errors {
+						errored = true
 
-					if l != 0 {
-						l--
+						l := e.Line
+						c := e.Column
+
+						if l != 0 {
+							l--
+						}
+
+						if c != 0 {
+							c--
+						}
+
+						sev := DiagErr
+						ds = append(ds, LspDiagnostic{
+							Range: LspRange{
+								Start: LspPosition{
+									Line:      l,
+									Character: c,
+								},
+								End: LspPosition{
+									Line:      l,
+									Character: c,
+								},
+							},
+							Severity: &sev,
+							Message:  e.Unwrap().Error(),
+						})
 					}
 
-					if c != 0 {
-						c--
+					for _, w := range res.OpStream.Warnings {
+						sev := DiagWarn
+						ds = append(ds, LspDiagnostic{
+							Range: LspRange{
+								Start: LspPosition{
+									Line:      0,
+									Character: 0,
+								},
+								End: LspPosition{
+									Line:      0,
+									Character: 0,
+								},
+							},
+							Severity: &sev,
+							Message:  w.Error(),
+						})
 					}
-
-					sev := DiagErr
-					ds = append(ds, LspDiagnostic{
-						Range: LspRange{
-							Start: LspPosition{
-								Line:      l,
-								Character: c,
-							},
-							End: LspPosition{
-								Line:      l,
-								Character: c,
-							},
-						},
-						Severity: &sev,
-						Message:  e.Unwrap().Error(),
-					})
 				}
 
-				for _, w := range res.OpStream.Warnings {
-					sev := DiagWarn
-					ds = append(ds, LspDiagnostic{
-						Range: LspRange{
-							Start: LspPosition{
-								Line:      0,
-								Character: 0,
+				if !errored {
+					if res.AssembleError != nil {
+						ds = append(ds, LspDiagnostic{
+							Range: LspRange{
+								Start: LspPosition{
+									Line:      0,
+									Character: 0,
+								},
+								End: LspPosition{
+									Line:      0,
+									Character: 0,
+								},
 							},
-							End: LspPosition{
-								Line:      0,
-								Character: 0,
-							},
-						},
-						Severity: &sev,
-						Message:  w.Error(),
-					})
+							Severity: func() *int { sev := DiagErr; return &sev }(),
+							Message:  res.AssembleError.Error(),
+						})
+					}
 				}
-			}
 
-			if l.config.ProgramSize {
-				if res.AssembleError == nil && res.OpStream != nil {
-					info := DiagInfo
+				if l.config.ProgramSize {
+					if res.AssembleError == nil && res.OpStream != nil {
+						info := DiagInfo
 
-					ds = append(ds, LspDiagnostic{
-						Range: LspRange{
-							Start: LspPosition{
-								Line:      0,
-								Character: 0,
+						ds = append(ds, LspDiagnostic{
+							Range: LspRange{
+								Start: LspPosition{
+									Line:      0,
+									Character: 0,
+								},
+								End: LspPosition{
+									Line:      0,
+									Character: 0,
+								},
 							},
-							End: LspPosition{
-								Line:      0,
-								Character: 0,
-							},
-						},
-						Severity: &info,
-						Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
-					})
+							Severity: &info,
+							Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
+						})
+					}
 				}
 			}
 
@@ -2052,97 +2155,98 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/documentHighlight":
 			req, err := read[lspDocumentHighlightRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read document highlight request: %s", err),
+				})
 			}
 
 			hs := []lspDocumentHighlight{}
 
-			name := res.SymOrRefAt(req.Params.Position)
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				name := res.SymOrRefAt(req.Params.Position)
 
-			for _, sym := range res.SymByName(name) {
-				hs = append(hs, prepareSymbolHighlight(sym))
-			}
+				for _, sym := range res.SymByName(name) {
+					hs = append(hs, prepareSymbolHighlight(sym))
+				}
 
-			for _, ref := range res.SymRefByName(name) {
-				hs = append(hs, prepareSymbolRefHighlight(ref))
+				for _, ref := range res.SymRefByName(name) {
+					hs = append(hs, prepareSymbolRefHighlight(ref))
+				}
 			}
 
 			return l.success(h.Id, hs)
 		case "textDocument/documentSymbol":
 			req, err := read[lspDocumentSymbolRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read document symbol request: %s", err),
+				})
 			}
 
 			syms := []LspDocumentSymbol{}
-			for _, s := range res.Symbols {
-				syms = append(syms, prepareSymbol(s))
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				for _, s := range res.Symbols {
+					syms = append(syms, prepareSymbol(s))
+				}
 			}
-
 			return l.success(h.Id, syms)
 
 		case "textDocument/semanticTokens/full":
 			req, err := read[lspSemanticTokensFullRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
-			}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read semantic tokens full request: %s", err),
+				})
 			}
 
 			st := SemanticTokens{}
-
-			for _, v := range res.Bools {
-				st = append(st, prepareValueSemToken(v))
-			}
-
-			for _, m := range res.Macros {
-				st = append(st, prepareMacroSemToken(m))
-			}
-
-			for _, op := range res.Ops {
-				if op.Type() == TokenValue {
-					st = append(st, prepareOpSemToken(op))
+			_, res, err := l.prepare(req.Params.TextDocument.Uri)
+			if err == nil {
+				for _, v := range res.Bools {
+					st = append(st, prepareValueSemToken(v))
 				}
-			}
 
-			for _, v := range res.Numbers {
-				st = append(st, prepareNumberSemToken(v))
-			}
-
-			for _, v := range res.Strings {
-				st = append(st, prepareStringSemToken(v))
-			}
-
-			for _, v := range res.Keywords {
-				st = append(st, prepareKeywordSemToken(v))
-			}
-
-			for _, t := range res.Tokens {
-				switch t.Type() {
-				case TokenComment:
-					st = append(st, prepareCommentSemToken(t))
+				for _, m := range res.Macros {
+					st = append(st, prepareMacroSemToken(m))
 				}
-			}
 
-			for _, s := range res.Symbols {
-				st = append(st, prepareSymbolSemToken(s))
-			}
+				for _, op := range res.Ops {
+					if op.Type() == TokenValue {
+						st = append(st, prepareOpSemToken(op))
+					}
+				}
 
-			for _, s := range res.SymbolRefs {
-				st = append(st, prepareSymbolRefSemToken(s))
+				for _, v := range res.Numbers {
+					st = append(st, prepareNumberSemToken(v))
+				}
+
+				for _, v := range res.Strings {
+					st = append(st, prepareStringSemToken(v))
+				}
+
+				for _, v := range res.Keywords {
+					st = append(st, prepareKeywordSemToken(v))
+				}
+
+				for _, t := range res.Tokens {
+					switch t.Type() {
+					case TokenComment:
+						st = append(st, prepareCommentSemToken(t))
+					}
+				}
+
+				for _, s := range res.Symbols {
+					st = append(st, prepareSymbolSemToken(s))
+				}
+
+				for _, s := range res.SymbolRefs {
+					st = append(st, prepareSymbolRefSemToken(s))
+				}
 			}
 
 			data := st.Encode()
@@ -2154,7 +2258,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "initialize":
 			req, err := read[lspInitializeRequest](b)
 			if err != nil {
-				return l.fail(h.Id, err)
+				return l.fail(h.Id, lspError{
+					Code:    1,
+					Message: fmt.Sprintf("failed to read initialize request: %s", err),
+				})
 			}
 
 			if req.Params != nil {
@@ -2313,7 +2420,7 @@ func prepareRenameSymbolEdit(sym Symbol, newName string) lspTextEdit {
 			},
 			End: LspPosition{
 				Line:      sym.Line(),
-				Character: sym.Begin() + len(sym.Name()),
+				Character: sym.Begin() + utf16LenString(sym.Name()),
 			},
 		},
 		NewText: newName,
@@ -2331,11 +2438,26 @@ func prepareCreateSymbolEdit(lines int, name string) lspTextEdit {
 			},
 			End: LspPosition{
 				Line:      lines,
-				Character: len(s),
+				Character: utf16LenString(s),
 			},
 		},
 		NewText: s,
 	}
+}
+
+// utf16LenString returns the number of UTF-16 code units required to
+// represent the provided string. LSP positions are defined in UTF-16
+// code units and we must provide ranges in those units.
+func utf16LenString(s string) int {
+	cnt := 0
+	for _, r := range s {
+		if r > 0xFFFF {
+			cnt += 2
+		} else {
+			cnt++
+		}
+	}
+	return cnt
 }
 
 func prepareRemoveSymbolEdit(sym Symbol) lspTextEdit {
@@ -2493,7 +2615,7 @@ func prepareSymbolHighlight(sym Symbol) lspDocumentHighlight {
 			},
 			End: LspPosition{
 				Line:      sym.Line(),
-				Character: sym.Begin() + len(sym.Name()),
+				Character: sym.Begin() + utf16LenString(sym.Name()),
 			},
 		},
 		Kind: &symbolHighlightKind,
