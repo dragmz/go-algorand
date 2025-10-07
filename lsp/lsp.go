@@ -959,6 +959,14 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 		// TODO: handle save
 
+	case "textDocument/didClose":
+		req, err := read[lspDidCloseRequest](b)
+		if err != nil {
+			return err
+		}
+
+		delete(l.docs, req.Params.TextDocument.Uri)
+
 	default: // requests
 
 		if l.shutdown {
@@ -972,18 +980,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 		case "$/cancelRequest":
 
-		case "textDocument/didClose":
-			req, err := read[lspDidCloseRequest](b)
-			if err != nil {
-				return err
-			}
-
-			delete(l.docs, req.Params.TextDocument.Uri)
-
 		case "workspace/executeCommand":
 			req, err := read[lspWorkspaceExecuteCommand](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			switch req.Params.Command {
@@ -991,16 +991,16 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[tealGotoPcCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				_, res, err := l.prepare(body.Params.Arguments.Uri)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				if res.AssembleError != nil {
-					return res.AssembleError
+					return l.fail(h.Id, res.AssembleError)
 				}
 
 				if res.OpStream == nil || res.OpStream.OffsetToSource == nil {
@@ -1026,19 +1026,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealUpdateVersion]
 				err := readInto(b, &body)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return errors.New("unexpected number of args")
+					return l.fail(h.Id, errors.New("unexpected number of args"))
 				}
 
 				arg := args[0]
 
 				doc := l.docs[arg.Uri]
 				if doc == nil {
-					return errors.New("doc not found")
+					return l.fail(h.Id, errors.New("doc not found"))
 				}
 
 				res := doc.Results()
@@ -1062,7 +1062,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1071,19 +1071,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealReplaceValueCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return errors.New("unexpected number of args")
+					return l.fail(h.Id, errors.New("unexpected number of args"))
 				}
 
 				arg := args[0]
 
 				doc := l.docs[arg.Uri]
 				if doc == nil {
-					return errors.New("doc not found")
+					return l.fail(h.Id, errors.New("doc not found"))
 				}
 
 				edits := []lspTextEdit{
@@ -1108,7 +1108,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1116,19 +1116,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveCallCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return errors.New("unexpected number of args")
+					return l.fail(h.Id, errors.New("unexpected number of args"))
 				}
 
 				arg := args[0]
 
 				doc := l.docs[arg.Uri]
 				if doc == nil {
-					return errors.New("doc not found")
+					return l.fail(h.Id, errors.New("doc not found"))
 				}
 
 				res := doc.Results()
@@ -1153,7 +1153,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1161,19 +1161,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveLabelCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return errors.New("unexpected number of args")
+					return l.fail(h.Id, errors.New("unexpected number of args"))
 				}
 
 				arg := args[0]
 
 				_, res, err := l.prepare(arg.Uri)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				name := arg.Name
@@ -1199,7 +1199,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1208,19 +1208,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				var body lspWorkspaceExecuteCommandBody[[]tealCreateLabelCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				args := body.Params.Arguments
 				if len(args) != 1 {
-					return errors.New("unexpected number of args")
+					return l.fail(h.Id, errors.New("unexpected number of args"))
 				}
 
 				arg := args[0]
 
 				_, res, err := l.prepare(arg.Uri)
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				name := arg.Name
@@ -1242,7 +1242,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 
 				if err != nil {
-					return err
+					return l.fail(h.Id, err)
 				}
 
 				return l.success(h.Id, struct{}{})
@@ -1257,7 +1257,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/prepareRename":
 			req, err := read[lspPrepareRenameRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			err = l.reportProgressBegin(req.Params.WorkDoneToken, "Preparing Rename", "Checking symbol for rename")
@@ -1268,7 +1268,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				l.reportProgressEnd(req.Params.WorkDoneToken, "Prepare rename failed")
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			symbols := res.SymbolsWithin(req.Params.Position)
@@ -1323,7 +1323,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/rename":
 			req, err := read[lspRenameRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			err = l.reportProgressBegin(req.Params.WorkDoneToken, "Renaming Symbol", fmt.Sprintf("Renaming to '%s'", req.Params.NewName))
@@ -1334,7 +1334,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
 				l.reportProgressEnd(req.Params.WorkDoneToken, "Rename failed")
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			chs := []lspTextEdit{}
@@ -1374,12 +1374,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/inlineValue":
 			req, err := read[lspInlineValueRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, _, err = l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			ls := []lspInlineValueText{}
@@ -1389,16 +1389,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/codeLens":
 			req, err := read[lspCodeLensRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
-			}
-
-			if res.AssembleError != nil {
-				return res.AssembleError
+				return l.fail(h.Id, err)
 			}
 
 			var cls []LspCodeLens
@@ -1451,16 +1447,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/inlayHint":
 			req, err := read[lspInlayHintRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
-			}
-
-			if res.AssembleError != nil {
-				return res.AssembleError
+				return l.fail(h.Id, err)
 			}
 
 			ihs := []LspInlayHint{}
@@ -1521,12 +1513,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/completion":
 			req, err := read[lspCompletionRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			var ln Line
@@ -1685,12 +1677,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/hover":
 			req, err := read[lspHoverRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			var c interface{} = struct{}{}
@@ -1710,12 +1702,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/definition":
 			req, err := read[lspDefinitionRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			ls := []lspLocation{}
@@ -1741,12 +1733,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/formatting":
 			req, err := read[lspDocumentFormattingRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			// TODO: implement formatting
@@ -1757,12 +1749,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/signatureHelp":
 			req, err := read[lspSignatureHelpRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			var sh interface{} = struct{}{}
@@ -1817,12 +1809,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/codeAction":
 			req, err := read[lspCodeActionRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			cas := []lspCodeAction{}
@@ -1955,12 +1947,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/diagnostic":
 			req, err := read[lspDiagnosticRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			ds := []LspDiagnostic{}
@@ -2060,12 +2052,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/documentHighlight":
 			req, err := read[lspDocumentHighlightRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			hs := []lspDocumentHighlight{}
@@ -2084,12 +2076,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/documentSymbol":
 			req, err := read[lspDocumentSymbolRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			syms := []LspDocumentSymbol{}
@@ -2102,12 +2094,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "textDocument/semanticTokens/full":
 			req, err := read[lspSemanticTokensFullRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			st := SemanticTokens{}
@@ -2162,7 +2154,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		case "initialize":
 			req, err := read[lspInitializeRequest](b)
 			if err != nil {
-				return err
+				return l.fail(h.Id, err)
 			}
 
 			if req.Params != nil {
