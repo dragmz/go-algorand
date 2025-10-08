@@ -387,7 +387,7 @@ type lspClientCapabilities struct {
 }
 
 type lspInitializeRequestParams struct {
-	ProcessId             int                        `json:"id"`
+	ProcessId             int                        `json:"processId"`
 	ClientInfo            *lspInitializeClientInfo   `json:"clientInfo"`
 	InitializationOptions *tealInitializationOptions `json:"initializationOptions,omitempty"`
 	Capabilities          lspClientCapabilities      `json:"capabilities"`
