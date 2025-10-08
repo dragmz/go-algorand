@@ -66,3 +66,36 @@ func TestPrepareRemoveLineEdit(t *testing.T) {
 		End:   LspPosition{Line: 124},
 	}, e.Range)
 }
+
+func TestUtf16LenString(t *testing.T) {
+	tests := []struct {
+		s    string
+		want int
+	}{
+		{"", 0},
+		{"a", 1},
+		{"hello", 5},
+		{"€", 1},
+		{"Café", 4},
+		{"e\u0301", 2},
+		{"e\u0301\u0323", 3},
+		{"😀", 2},
+		{"a😀b", 4},
+		{"👍\U0001F3FD", 4},
+		{"✌️", 2},
+		{"1\uFE0F\u20E3", 3},
+		{"🇺🇸", 4},
+		{"👨\u200D👩\u200D👦", 8},
+		{"漢字", 2},
+		{"\U0002000B", 2},
+		{"\U0001D11E\U0001D11E\U0001D11E", 6},
+		{"\U00010437\u0301", 3},
+	}
+
+	for _, tt := range tests {
+		got := utf16LenString(tt.s)
+		if got != tt.want {
+			t.Fatalf("utf16LenString(%q) = %d, want %d", tt.s, got, tt.want)
+		}
+	}
+}
