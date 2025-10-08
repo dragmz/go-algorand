@@ -111,6 +111,20 @@ type jsonRpcRequest struct {
 	Params  interface{} `json:"params"`
 }
 
+const (
+	ErrorCodeParseError     = -32700
+	ErrorCodeInvalidRequest = -32600
+	ErrorCodeMethodNotFound = -32601
+	ErrorCodeInvalidParams  = -32602
+	ErrorCodeInternalError  = -32603
+
+	ErrorCodeServerNotInitialized = -32002
+	ErrorCodeRequestFailed        = -32803
+	ErrorCodeServerCancelled      = -32802
+	ErrorCodeContentModified      = -32801
+	ErrorCodeRequestCancelled     = -32800
+)
+
 type jsonRpcHeader struct {
 	JsonRpc string `json:"jsonrpc"`
 
@@ -976,7 +990,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 		switch h.Method {
 		case "shutdown":
 			l.shutdown = true
-			return l.success(h.Id, []struct{}{})
+			return l.success(h.Id, nil)
 
 		case "$/cancelRequest":
 
@@ -984,7 +998,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspWorkspaceExecuteCommand](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to parse request: %v", err),
 				})
 			}
@@ -995,7 +1009,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				err := readInto(b, &body)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeParseError,
 						Message: fmt.Sprintf("failed to read request body: %v", err),
 					})
 				}
@@ -1003,21 +1017,21 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				_, res, err := l.prepare(body.Params.Arguments.Uri)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to prepare document: %v", err),
 					})
 				}
 
 				if res.AssembleError != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to assemble document: %v", res.AssembleError),
 					})
 				}
 
 				if res.OpStream == nil || res.OpStream.OffsetToSource == nil {
 					return l.fail(h.Id, lspError{
-						Code:    3,
+						Code:    ErrorCodeRequestFailed,
 						Message: "no opstream",
 					})
 				}
@@ -1025,7 +1039,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				loc, ok := res.OpStream.OffsetToSource[body.Params.Arguments.Pc]
 				if !ok {
 					return l.fail(h.Id, lspError{
-						Code:    3,
+						Code:    ErrorCodeRequestFailed,
 						Message: "pc not found",
 					})
 				}
@@ -1039,7 +1053,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				err := readInto(b, &body)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeParseError,
 						Message: fmt.Sprintf("failed to read request body: %v", err),
 					})
 				}
@@ -1047,7 +1061,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				args := body.Params.Arguments
 				if len(args) != 1 {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeInvalidParams,
 						Message: errors.New("unexpected number of args").Error(),
 					})
 				}
@@ -1057,7 +1071,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				doc := l.docs[arg.Uri]
 				if doc == nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: errors.New("doc not found").Error(),
 					})
 				}
@@ -1084,19 +1098,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to apply edit: %v", err),
 					})
 				}
 
-				return l.success(h.Id, struct{}{})
+				return l.success(h.Id, nil)
 
 			case "teal.value.replace":
 				var body lspWorkspaceExecuteCommandBody[[]tealReplaceValueCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeParseError,
 						Message: fmt.Sprintf("failed to read request body: %v", err),
 					})
 				}
@@ -1104,7 +1118,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				args := body.Params.Arguments
 				if len(args) != 1 {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeInvalidParams,
 						Message: errors.New("unexpected number of args").Error(),
 					})
 				}
@@ -1114,7 +1128,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				doc := l.docs[arg.Uri]
 				if doc == nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: errors.New("doc not found").Error(),
 					})
 				}
@@ -1142,18 +1156,18 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to apply edit: %v", err),
 					})
 				}
 
-				return l.success(h.Id, struct{}{})
+				return l.success(h.Id, nil)
 			case "teal.call.remove":
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveCallCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeParseError,
 						Message: fmt.Sprintf("failed to read request body: %v", err),
 					})
 				}
@@ -1161,7 +1175,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				args := body.Params.Arguments
 				if len(args) != 1 {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeInvalidParams,
 						Message: errors.New("unexpected number of args").Error(),
 					})
 				}
@@ -1171,7 +1185,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				doc := l.docs[arg.Uri]
 				if doc == nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: errors.New("doc not found").Error(),
 					})
 				}
@@ -1199,18 +1213,18 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to apply edit: %v", err),
 					})
 				}
 
-				return l.success(h.Id, struct{}{})
+				return l.success(h.Id, nil)
 			case "teal.label.remove":
 				var body lspWorkspaceExecuteCommandBody[[]tealRemoveLabelCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeParseError,
 						Message: fmt.Sprintf("failed to read request body: %v", err),
 					})
 				}
@@ -1218,7 +1232,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				args := body.Params.Arguments
 				if len(args) != 1 {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeInvalidParams,
 						Message: errors.New("unexpected number of args").Error(),
 					})
 				}
@@ -1228,7 +1242,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				_, res, err := l.prepare(arg.Uri)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to prepare document: %v", err),
 					})
 				}
@@ -1257,19 +1271,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to apply edit: %v", err),
 					})
 				}
 
-				return l.success(h.Id, struct{}{})
+				return l.success(h.Id, nil)
 
 			case "teal.label.create":
 				var body lspWorkspaceExecuteCommandBody[[]tealCreateLabelCommandArgs]
 				err := readInto(b, &body)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeParseError,
 						Message: fmt.Sprintf("failed to read request body: %v", err),
 					})
 				}
@@ -1277,7 +1291,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				args := body.Params.Arguments
 				if len(args) != 1 {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeInvalidParams,
 						Message: errors.New("unexpected number of args").Error(),
 					})
 				}
@@ -1287,7 +1301,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				_, res, err := l.prepare(arg.Uri)
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to prepare document: %v", err),
 					})
 				}
@@ -1312,16 +1326,16 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				if err != nil {
 					return l.fail(h.Id, lspError{
-						Code:    1,
+						Code:    ErrorCodeRequestFailed,
 						Message: fmt.Sprintf("failed to apply edit: %v", err),
 					})
 				}
 
-				return l.success(h.Id, struct{}{})
+				return l.success(h.Id, nil)
 
 			default:
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeMethodNotFound,
 					Message: fmt.Sprintf("unknown command: %s", req.Params.Command),
 				})
 			}
@@ -1330,7 +1344,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspPrepareRenameRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1344,7 +1358,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			if err != nil {
 				l.reportProgressEnd(req.Params.WorkDoneToken, "Prepare rename failed")
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeRequestFailed,
 					Message: fmt.Sprintf("failed to prepare document: %v", err),
 				})
 			}
@@ -1396,13 +1410,13 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
 			}
 
-			return l.success(h.Id, struct{}{})
+			return l.success(h.Id, nil)
 
 		case "textDocument/rename":
 			req, err := read[lspRenameRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1416,7 +1430,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			if err != nil {
 				l.reportProgressEnd(req.Params.WorkDoneToken, "Rename failed")
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeRequestFailed,
 					Message: fmt.Sprintf("failed to prepare document: %v", err),
 				})
 			}
@@ -1459,7 +1473,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspInlineValueRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1473,7 +1487,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspCodeLensRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1532,7 +1546,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspInlayHintRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1599,7 +1613,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspCompletionRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1764,7 +1778,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspHoverRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1790,7 +1804,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspDefinitionRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1822,7 +1836,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspDocumentFormattingRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1842,7 +1856,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspSignatureHelpRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -1904,7 +1918,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspCodeActionRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read request body: %v", err),
 				})
 			}
@@ -2044,7 +2058,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspDiagnosticRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read diagnostic request: %s", err),
 				})
 			}
@@ -2156,7 +2170,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspDocumentHighlightRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read document highlight request: %s", err),
 				})
 			}
@@ -2181,7 +2195,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspDocumentSymbolRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read document symbol request: %s", err),
 				})
 			}
@@ -2199,7 +2213,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspSemanticTokensFullRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read semantic tokens full request: %s", err),
 				})
 			}
@@ -2259,7 +2273,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			req, err := read[lspInitializeRequest](b)
 			if err != nil {
 				return l.fail(h.Id, lspError{
-					Code:    1,
+					Code:    ErrorCodeParseError,
 					Message: fmt.Sprintf("failed to read initialize request: %s", err),
 				})
 			}
