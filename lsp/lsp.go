@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -431,6 +432,14 @@ type lspDocumentSymbolTextDocument struct {
 
 type lspDocumentSymbolParams struct {
 	TextDocument *lspDocumentSymbolTextDocument `json:"textDocument"`
+}
+
+type tealDecompileCommandArgs struct {
+	Bytecode string `json:"bytecode"`
+}
+
+type tealDecompileCommandResult struct {
+	Teal string `json:"teal"`
 }
 
 type tealGotoPcCommandArgs struct {
@@ -1004,6 +1013,38 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			switch req.Params.Command {
+			case "teal.decompile":
+				var body lspWorkspaceExecuteCommandBody[tealDecompileCommandArgs]
+				err := readInto(b, &body)
+				if err != nil {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeParseError,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
+				}
+
+				bs, err := base64.StdEncoding.DecodeString(body.Params.Arguments.Bytecode)
+				if err != nil {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeInvalidParams,
+						Message: fmt.Sprintf("failed to decode bytecode: %v", err),
+					})
+				}
+
+				teal, err := logic.Disassemble(bs)
+				if err != nil {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeRequestFailed,
+						Message: fmt.Sprintf("failed to disassemble bytecode: %v", err),
+					})
+				}
+
+				result := tealDecompileCommandResult{
+					Teal: teal,
+				}
+
+				return l.success(h.Id, result)
+
 			case "teal.pc.resolve":
 				var body lspWorkspaceExecuteCommandBody[tealGotoPcCommandArgs]
 				err := readInto(b, &body)
