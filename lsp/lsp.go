@@ -434,6 +434,14 @@ type lspDocumentSymbolParams struct {
 	TextDocument *lspDocumentSymbolTextDocument `json:"textDocument"`
 }
 
+type tealGenerateSourcemapCommandArgs struct {
+	Uri string `json:"uri"`
+}
+
+type tealGenerateSourcemapCommandResult struct {
+	SourceMap logic.SourceMap `json:"sourcemap"`
+}
+
 type tealDecompileCommandArgs struct {
 	Bytecode string `json:"bytecode"`
 }
@@ -1013,6 +1021,36 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			switch req.Params.Command {
+			case "teal.sourcemap.generate":
+				var body lspWorkspaceExecuteCommandBody[tealGenerateSourcemapCommandArgs]
+				err := readInto(b, &body)
+				if err != nil {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeParseError,
+						Message: fmt.Sprintf("failed to read request body: %v", err),
+					})
+				}
+
+				_, res, err := l.prepare(body.Params.Arguments.Uri)
+				if err != nil {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeRequestFailed,
+						Message: fmt.Sprintf("failed to prepare document: %v", err),
+					})
+				}
+
+				if res.AssembleError != nil {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeRequestFailed,
+						Message: fmt.Sprintf("failed to assemble document: %v", res.AssembleError),
+					})
+				}
+
+				sm := logic.GetSourceMap([]string{body.Params.Arguments.Uri}, res.OpStream.OffsetToSource)
+				return l.success(h.Id, tealGenerateSourcemapCommandResult{
+					SourceMap: sm,
+				})
+
 			case "teal.decompile":
 				var body lspWorkspaceExecuteCommandBody[tealDecompileCommandArgs]
 				err := readInto(b, &body)
