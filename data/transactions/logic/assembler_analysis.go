@@ -39,6 +39,7 @@ type SourceDiagnostic struct {
 // and public diagnostics for editor tooling.
 type SourceAnalysisResult struct {
 	Lines       []SourceLine
+	Index       SourceIndex
 	OpStream    *OpStream
 	Diagnostics []SourceDiagnostic
 	Err         error
@@ -63,6 +64,7 @@ func analyzeSourceForTools(source string, version uint64) SourceAnalysisResult {
 
 	return SourceAnalysisResult{
 		Lines:       lines,
+		Index:       sourceIndexForTools(lines, ops),
 		OpStream:    ops,
 		Diagnostics: diagnostics,
 		Err:         err,

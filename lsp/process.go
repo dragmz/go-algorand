@@ -935,56 +935,28 @@ type parserContext struct {
 	mode    logic.RunMode
 	version uint64
 
-	lintlops [][]Op
-	ops      []Op
-	lops     [][]Op
-	args     *arguments
+	ops  []Op
+	lops [][]Op
+	args *arguments
 
 	bools []Token
 	nums  []Token
 	strs  []Token
 	keys  []Token
 	mcrs  []Token
-	refs  []Token
-
-	vtok   *Token
-	protos map[string]*ProtoExpr
-	refc   map[string]int
 
 	defines map[string]bool
 
-	defs []*labelSymbol
-
 	// current state
-	lintline []Op // current line ops for linting; may differ from actual ops (e.g. due to no linting for #define)
-	line     []Op // current line ops
-	label    *LabelExpr
-	comments []string
-	end      bool // end of op flag
-}
-
-func (c *parserContext) comment(text string) {
-	c.comments = append(c.comments, text)
+	line []Op // current line ops
+	end  bool // end of op flag
 }
 
 func (c *parserContext) emit(op Op) {
 	c.line = append(c.line, op)
+}
 
-	switch op := op.(type) {
-	case usesLabels:
-		for _, lbl := range op.Labels() {
-			c.refc[lbl.Name]++
-		}
-	}
-
-	switch op := op.(type) {
-	case *ProtoExpr:
-		if c.label != nil {
-			c.protos[c.label.Name] = op
-		}
-	case *LabelExpr:
-		c.label = op
-	}
+func (c *parserContext) comment(text string) {
 }
 
 func (c *parserContext) minVersion(v uint64) {
@@ -1020,17 +992,7 @@ func (c *parserContext) mustReadDefine() string {
 
 	c.defines[name] = true
 
-	t := c.args.Curr()
-	c.defs = append(c.defs, &labelSymbol{
-		n:    name,
-		l:    t.l,
-		b:    t.b,
-		e:    t.e,
-		docs: strings.Join(c.comments, "\n"),
-	})
-
 	c.end = true
-	c.lintline = c.line
 
 	return name
 }
@@ -1057,9 +1019,6 @@ func (c *parserContext) mustReadPragma(argName string) uint64 {
 	case "version":
 		c.mcrs = append(c.mcrs, c.args.Curr())
 		v := c.mustReadInt("version value")
-
-		tok := c.args.Curr()
-		c.vtok = &tok
 
 		if v < 1 {
 			c.failCurr(errors.New("version must be at least 1"))
@@ -1235,8 +1194,6 @@ func (c *parserContext) mustReadGlobalField(name string) logic.GlobalField {
 
 func (c *parserContext) mustReadLabel(name string) string {
 	c.mustReadArg(name)
-	// TODO: validate label name
-	c.refs = append(c.refs, c.args.Curr())
 	return c.args.Text()
 }
 
@@ -1273,7 +1230,6 @@ func (c *parserContext) readLabelsArray(name string) []string {
 
 	for c.args.Scan() {
 		res = append(res, c.args.Text())
-		c.refs = append(c.refs, c.args.Curr())
 	}
 
 	return res
@@ -3501,24 +3457,18 @@ func utf16ColumnFromByte(line string, column int) int {
 func Process(source string) *ProcessResult {
 	analysis := logic.AnalyzeSourceForTools(source)
 	c := &parserContext{
-		version:  1,
-		ops:      []Op{},
-		lintlops: [][]Op{},
-		mode:     logic.ModeApp,
-		protos:   map[string]*ProtoExpr{},
-		refc:     map[string]int{},
-		defines:  map[string]bool{},
-		defs:     []*labelSymbol{},
+		version: 1,
+		ops:     []Op{},
+		mode:    logic.ModeApp,
+		defines: definesFromSourceIndex(analysis.Index),
 	}
 
 	ts, lines := readAnalyzedSourceLines(c, analysis.Lines)
 
 	var ops []Token
-	var lsyms []*labelSymbol
 	var vers []RequiredVersion
 
 	for li := 0; li < len(lines); li++ {
-		c.lintline = nil
 		c.line = []Op{}
 		c.end = false
 
@@ -3531,7 +3481,6 @@ func Process(source string) *ProcessResult {
 				defer func() {
 					switch v := recover().(type) {
 					case define:
-						c.refs = append(c.refs, c.args.Curr())
 					case recoverable:
 						c.emit(Empty) // consider replacing with Raw string expr
 					case nil:
@@ -3555,17 +3504,7 @@ func Process(source string) *ProcessResult {
 						return
 					}
 
-					t := c.args.Curr()
-					lsyms = append(lsyms, &labelSymbol{
-						n:    name,
-						l:    t.l,
-						b:    t.b,
-						e:    t.e,
-						docs: strings.Join(c.comments, "\n"),
-					})
-
 					c.emit(&LabelExpr{Name: name})
-					c.comments = nil
 
 					return
 				}
@@ -3619,7 +3558,6 @@ func Process(source string) *ProcessResult {
 					} else {
 						if c.defines[c.args.Text()] {
 							// the opcode is a defined macro
-							c.refs = append(c.refs, c.args.Curr())
 						} else {
 							c.failCurr(errors.Errorf("unknown opcode: %s", c.args.Text()))
 						}
@@ -3640,60 +3578,17 @@ func Process(source string) *ProcessResult {
 			}
 		}
 
-		if c.lintline == nil {
-			c.lintline = c.line
-		}
-
 		c.ops = append(c.ops, c.line...)
 		c.lops = append(c.lops, c.line)
-		c.lintlops = append(c.lintlops, c.lintline)
-	}
-
-	linter := &Linter{l: c.lintlops}
-	linter.Lint()
-
-	symm := map[string]bool{}
-	for _, sym := range lsyms {
-		symm[sym.Name()] = true
-	}
-
-	for _, sym := range c.defs {
-		symm[sym.n] = true
-	}
-
-	var mrefs []Token
-	for _, ref := range c.refs {
-		if _, ok := symm[ref.String()]; !ok {
-			mrefs = append(mrefs, ref)
-		}
-	}
-
-	for i := 0; i < len(lsyms); i++ {
-		sym := lsyms[i]
-		proto := c.protos[sym.Name()]
-		if proto != nil {
-			sym.sig = fmt.Sprintf("in: %d, out: %d", proto.Args, proto.Results)
-			lsyms[i] = sym
-		}
-	}
-
-	syms := make([]Symbol, len(lsyms)+len(c.defs))
-
-	for i := 0; i < len(lsyms); i++ {
-		syms[i] = lsyms[i]
-	}
-
-	for i := 0; i < len(c.defs); i++ {
-		syms[i+len(lsyms)] = c.defs[i]
 	}
 
 	result := &ProcessResult{
 		Mode:                 c.mode,
-		Version:              c.version,
-		VersionToken:         c.vtok,
-		MissRefs:             mrefs,
-		Symbols:              syms,
-		SymbolRefs:           c.refs,
+		Version:              analysis.Index.Version,
+		VersionToken:         versionTokenFromSourceIndex(analysis.Lines, analysis.Index),
+		MissRefs:             referencesFromSourceIndex(analysis.Lines, analysis.Index.MissingReferences),
+		Symbols:              symbolsFromSourceIndex(analysis.Lines, analysis.Index),
+		SymbolRefs:           referencesFromSourceIndex(analysis.Lines, analysis.Index.References),
 		Tokens:               ts,
 		Lines:                lines,
 		Listing:              c.ops,
@@ -3704,10 +3599,10 @@ func Process(source string) *ProcessResult {
 		Strings:              c.strs,
 		Keywords:             c.keys,
 		Macros:               c.mcrs,
-		Redundants:           linter.reds,
+		Redundants:           redundantsFromSourceIndex(analysis.Index),
 		Versions:             vers,
-		RefCounts:            c.refc,
-		Defines:              c.defines,
+		RefCounts:            analysis.Index.RefCounts,
+		Defines:              definesFromSourceIndex(analysis.Index),
 		SourceLines:          analysis.Lines,
 		AssemblerDiagnostics: analysis.Diagnostics,
 		OpStream:             analysis.OpStream,
