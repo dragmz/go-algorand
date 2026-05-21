@@ -3422,82 +3422,80 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 	return ""
 }
 
-func readTokens(source string) ([]Token, []Diagnostic) {
-	s := &Lexer{Source: []byte(source)}
+func readSourceLines(c *parserContext, source string) ([]Token, []Line) {
+	sourceLines := logic.SourceLinesForTools(source)
+	tokens := make([]Token, 0)
+	lines := make([]Line, 0, len(sourceLines))
 
-	ts := []Token{}
-
-	for s.Scan() {
-		ts = append(ts, s.Curr())
-	}
-
-	diags := make([]Diagnostic, len(s.diag))
-
-	for i, diag := range s.diag {
-		diags[i] = diag
-	}
-
-	return ts, diags
-}
-
-func readLines(ts []Token) []Line {
-	lines := []Line{}
-
-	p := 0
-	for i := 0; i < len(ts); i++ {
-		t := ts[i]
-
-		j := i + 1
-		eol := t.Type() == TokenEol
-
-		if eol || j == len(ts) {
-			k := j
-			if eol {
-				k--
-			}
-
-			lines = append(lines, Line{
-				Tokens: ts[p:k],
-			})
-			p = j
+	for _, sourceLine := range sourceLines {
+		line := Line{
+			Tokens: make([]Token, 0, len(sourceLine.Tokens)),
+			Subs:   make([]Subline, 0, len(sourceLine.Statements)),
 		}
-	}
 
-	return lines
-}
+		for _, sourceToken := range sourceLine.Tokens {
+			token := tokenFromSourceToken(sourceLine.Text, sourceToken)
+			line.Tokens = append(line.Tokens, token)
+			tokens = append(tokens, token)
+		}
 
-func prepareLines(c *parserContext, lines []Line) {
-	for li, l := range lines {
-		sf := 0
-
-		for i := 0; i < len(l.Tokens); i++ {
-			t := l.Tokens[i]
-			switch t.Type() {
-			case TokenSemicolon:
-				l.Subs = append(l.Subs, Subline{
-					Tokens: l.Tokens[sf:i],
-				})
-				sf = i + 1
-			case TokenComment:
-				if strings.TrimSpace(t.String()) == "#pragma mode logicsig" {
-					c.mode = logic.ModeSig
-				}
-
-				l.Tokens = l.Tokens[:i]
-				l.Subs = append(l.Subs, Subline{
-					Tokens: l.Tokens[sf:i],
-				})
-				sf = i
+		if sourceLine.Comment != nil {
+			comment := tokenFromSourceToken(sourceLine.Text, *sourceLine.Comment)
+			tokens = append(tokens, comment)
+			if strings.TrimSpace(comment.String()) == "#pragma mode logicsig" {
+				c.mode = logic.ModeSig
 			}
 		}
 
-		if sf <= len(l.Tokens) {
-			l.Subs = append(l.Subs, Subline{
-				Tokens: l.Tokens[sf:len(l.Tokens)],
-			})
+		for _, statement := range sourceLine.Statements {
+			subline := Subline{
+				Tokens: make([]Token, 0, len(statement.Tokens)),
+			}
+			for _, sourceToken := range statement.Tokens {
+				subline.Tokens = append(subline.Tokens, tokenFromSourceToken(sourceLine.Text, sourceToken))
+			}
+			line.Subs = append(line.Subs, subline)
 		}
-		lines[li] = l
+
+		if len(line.Subs) == 0 {
+			line.Subs = append(line.Subs, Subline{})
+		}
+
+		lines = append(lines, line)
 	}
+
+	return tokens, lines
+}
+
+func tokenFromSourceToken(line string, sourceToken logic.SourceToken) Token {
+	return Token{
+		v: sourceToken.Text,
+		l: sourceToken.Line,
+		b: utf16ColumnFromByte(line, sourceToken.Column),
+		e: utf16ColumnFromByte(line, sourceToken.EndColumn),
+		t: tokenTypeFromSourceToken(sourceToken.Kind),
+	}
+}
+
+func tokenTypeFromSourceToken(kind logic.SourceTokenKind) TokenType {
+	switch kind {
+	case logic.SourceTokenSemicolon:
+		return TokenSemicolon
+	case logic.SourceTokenComment:
+		return TokenComment
+	default:
+		return TokenValue
+	}
+}
+
+func utf16ColumnFromByte(line string, column int) int {
+	if column < 0 {
+		column = 0
+	}
+	if column > len(line) {
+		column = len(line)
+	}
+	return utf16LenString(line[:column])
 }
 
 func Process(source string) *ProcessResult {
@@ -3512,11 +3510,7 @@ func Process(source string) *ProcessResult {
 		defs:     []*labelSymbol{},
 	}
 
-	var ts []Token
-	ts, c.diag = readTokens(source)
-
-	lines := readLines(ts)
-	prepareLines(c, lines)
+	ts, lines := readSourceLines(c, source)
 
 	var ops []Token
 	var lsyms []*labelSymbol

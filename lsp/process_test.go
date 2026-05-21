@@ -233,6 +233,42 @@ func TestMultiSemicolon(t *testing.T) {
 	assert.Len(t, res.Lines[0].Tokens, 3)
 }
 
+func TestAssemblerSourceTokenizationRegressions(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		tokens []string
+	}{
+		{
+			name:   "base64 with comment marker",
+			source: `byte base64(ABC//==) // comment`,
+			tokens: []string{"byte", "base64(ABC//==)"},
+		},
+		{
+			name:   "string with comment marker",
+			source: `byte "foo bar // not a comment" // comment`,
+			tokens: []string{"byte", `"foo bar // not a comment"`},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			res := Process(test.source)
+			if !assert.Len(t, res.Lines, 1) {
+				return
+			}
+			if !assert.Len(t, res.Lines[0].Subs, 1) {
+				return
+			}
+			var got []string
+			for _, token := range res.Lines[0].Subs[0].Tokens {
+				got = append(got, token.String())
+			}
+			assert.Equal(t, test.tokens, got)
+		})
+	}
+}
+
 func TestGithubIssueVsCodeTeal3Regression(t *testing.T) {
 	Process(`int 1 /
 	b a`)
@@ -368,10 +404,10 @@ func TestEmojiLabelAndBranch(t *testing.T) {
 		"👍👍",
 		"👋👋",
 		"🤝",
-		"🧑🏽‍🔧",      // person with skin tone + ZWJ
+		"🧑🏽‍🔧",    // person with skin tone + ZWJ
 		"👩‍👩‍👧‍👦", // family (ZWJ sequence)
-		"🏳️‍🌈",      // flag (ZWJ + VS16)
-		"🇺🇸",        // regional indicator pair (flag)
+		"🏳️‍🌈",    // flag (ZWJ + VS16)
+		"🇺🇸",      // regional indicator pair (flag)
 	}
 
 	for _, name := range emojiCases {
