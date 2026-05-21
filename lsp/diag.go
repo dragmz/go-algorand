@@ -21,15 +21,3 @@ const (
 	DiagInfo = 3
 	DiagHint = 4
 )
-
-type Diagnostic interface {
-	Line() int
-
-	Begin() int
-	End() int
-
-	String() string
-	Severity() DiagnosticSeverity
-
-	Rule() string
-}

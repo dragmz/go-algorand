@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -98,4 +99,23 @@ func TestUtf16LenString(t *testing.T) {
 			t.Fatalf("utf16LenString(%q) = %d, want %d", tt.s, got, tt.want)
 		}
 	}
+}
+
+func TestSourceDiagnosticToLSP(t *testing.T) {
+	lines := logic.SourceLinesForTools("int 😀")
+	diag := sourceDiagnosticToLSP(lines, logic.SourceDiagnostic{
+		Message:   "bad emoji",
+		Severity:  logic.SourceDiagnosticError,
+		Line:      0,
+		Column:    len("int "),
+		EndColumn: len("int 😀"),
+	})
+
+	assert.Equal(t, "bad emoji", diag.Message)
+	assert.NotNil(t, diag.Severity)
+	assert.Equal(t, int(DiagErr), *diag.Severity)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0, Character: 4},
+		End:   LspPosition{Line: 0, Character: 6},
+	}, diag.Range)
 }

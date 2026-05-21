@@ -37,7 +37,6 @@ func TestProcessEmpty(t *testing.T) {
 	assert.Equal(t, logic.ModeApp, res.Mode)
 	assert.Equal(t, uint64(1), res.Version)
 
-	assert.Equal(t, 0, len(res.Diagnostics))
 	assert.Equal(t, 0, len(res.Keywords))
 	assert.Equal(t, 0, len(res.Lines))
 	assert.Equal(t, 0, len(res.Listing))
@@ -276,24 +275,6 @@ func TestGithubIssueVsCodeTeal3Regression(t *testing.T) {
 
 func TestBranchToSameLine(t *testing.T) {
 	Process("a:;b a")
-}
-
-func TestInfiniteLoopLinting(t *testing.T) {
-	res := Process(`#pragma version 8
-	l1:
-	b l1
-	l2:
-	b l2`)
-
-	assert.Len(t, res.Diagnostics, 2)
-	assert.Equal(t, res.Diagnostics[0].Line(), 2)
-	assert.Equal(t, res.Diagnostics[1].Line(), 4)
-}
-
-func TestDefine(t *testing.T) {
-	res := Process(`#pragma version 8;
-	#define test123 b a`)
-	assert.Len(t, res.Diagnostics, 0)
 }
 
 func TestLogicSigMode(t *testing.T) {

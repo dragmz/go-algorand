@@ -2146,76 +2146,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				errored := false
-
-				if res.OpStream != nil {
-					for _, e := range res.OpStream.Errors {
-						errored = true
-
-						l := e.Line
-						c := e.Column
-
-						if l != 0 {
-							l--
-						}
-
-						if c != 0 {
-							c--
-						}
-
-						sev := DiagErr
-						ds = append(ds, LspDiagnostic{
-							Range: LspRange{
-								Start: LspPosition{
-									Line:      l,
-									Character: c,
-								},
-								End: LspPosition{
-									Line:      l,
-									Character: c,
-								},
-							},
-							Severity: &sev,
-							Message:  e.Unwrap().Error(),
-						})
-					}
-
-					for _, w := range res.OpStream.Warnings {
-						sev := DiagWarn
-						ds = append(ds, LspDiagnostic{
-							Range: LspRange{
-								Start: LspPosition{
-									Line:      0,
-									Character: 0,
-								},
-								End: LspPosition{
-									Line:      0,
-									Character: 0,
-								},
-							},
-							Severity: &sev,
-							Message:  w.Error(),
-						})
-					}
-				}
-
-				if !errored {
-					if res.AssembleError != nil {
-						ds = append(ds, LspDiagnostic{
-							Range: LspRange{
-								Start: LspPosition{
-									Line:      0,
-									Character: 0,
-								},
-								End: LspPosition{
-									Line:      0,
-									Character: 0,
-								},
-							},
-							Severity: func() *int { sev := DiagErr; return &sev }(),
-							Message:  res.AssembleError.Error(),
-						})
-					}
+				for _, diagnostic := range res.AssemblerDiagnostics {
+					ds = append(ds, sourceDiagnosticToLSP(res.SourceLines, diagnostic))
 				}
 
 				if l.config.ProgramSize {
@@ -2715,29 +2647,36 @@ func prepareSymbolHighlight(sym Symbol) lspDocumentHighlight {
 	}
 }
 
-func prepareDiagnostics(res *ProcessResult) []LspDiagnostic {
-	lds := []LspDiagnostic{}
-
-	for _, d := range res.Diagnostics {
-		sev := int(d.Severity())
-
-		lds = append(lds, LspDiagnostic{
-			Range: LspRange{
-				Start: LspPosition{
-					Line:      d.Line(),
-					Character: d.Begin(),
-				},
-				End: LspPosition{
-					Line:      d.Line(),
-					Character: d.End(),
-				},
-			},
-			Severity: &sev,
-			Message:  d.String(),
-		})
+func sourceDiagnosticToLSP(lines []logic.SourceLine, diagnostic logic.SourceDiagnostic) LspDiagnostic {
+	sev := int(sourceDiagnosticSeverityToLSP(diagnostic.Severity))
+	lineText := ""
+	if diagnostic.Line >= 0 && diagnostic.Line < len(lines) {
+		lineText = lines[diagnostic.Line].Text
 	}
 
-	return lds
+	return LspDiagnostic{
+		Range: LspRange{
+			Start: LspPosition{
+				Line:      diagnostic.Line,
+				Character: utf16ColumnFromByte(lineText, diagnostic.Column),
+			},
+			End: LspPosition{
+				Line:      diagnostic.Line,
+				Character: utf16ColumnFromByte(lineText, diagnostic.EndColumn),
+			},
+		},
+		Severity: &sev,
+		Message:  diagnostic.Message,
+	}
+}
+
+func sourceDiagnosticSeverityToLSP(severity logic.SourceDiagnosticSeverity) DiagnosticSeverity {
+	switch severity {
+	case logic.SourceDiagnosticWarning:
+		return DiagWarn
+	default:
+		return DiagErr
+	}
 }
 
 func prepareRemoveLineEdit(line int) lspTextEdit {

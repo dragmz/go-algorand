@@ -939,7 +939,6 @@ type parserContext struct {
 	ops      []Op
 	lops     [][]Op
 	args     *arguments
-	diag     []Diagnostic
 
 	bools []Token
 	nums  []Token
@@ -996,12 +995,10 @@ func (c *parserContext) modeMinVersion(mode logic.RunMode, v uint64) {
 }
 
 func (c *parserContext) failAt(l int, b int, e int, err error) {
-	c.errorAt(l, b, e, err)
 	panic(recoverable{})
 }
 
 func (c *parserContext) errorAt(l int, b int, e int, err error) {
-	c.diag = append(c.diag, parseError{l: l, b: b, e: e, error: err})
 }
 
 func (c *parserContext) failToken(t Token, err error) {
@@ -2812,8 +2809,6 @@ type ProcessResult struct {
 	VersionToken *Token
 	Versions     []RequiredVersion
 
-	Diagnostics []Diagnostic
-
 	MissRefs   []Token
 	Symbols    []Symbol
 	SymbolRefs []Token
@@ -2836,8 +2831,10 @@ type ProcessResult struct {
 	RefCounts map[string]int
 	Defines   map[string]bool
 
-	OpStream      *logic.OpStream
-	AssembleError error
+	SourceLines          []logic.SourceLine
+	AssemblerDiagnostics []logic.SourceDiagnostic
+	OpStream             *logic.OpStream
+	AssembleError        error
 }
 
 func (r ProcessResult) AvailableOps() []opItem {
@@ -3423,7 +3420,10 @@ func (r ProcessResult) DocAt(l int, ch int, opDocShort func(string) string, opDo
 }
 
 func readSourceLines(c *parserContext, source string) ([]Token, []Line) {
-	sourceLines := logic.SourceLinesForTools(source)
+	return readAnalyzedSourceLines(c, logic.SourceLinesForTools(source))
+}
+
+func readAnalyzedSourceLines(c *parserContext, sourceLines []logic.SourceLine) ([]Token, []Line) {
 	tokens := make([]Token, 0)
 	lines := make([]Line, 0, len(sourceLines))
 
@@ -3499,6 +3499,7 @@ func utf16ColumnFromByte(line string, column int) int {
 }
 
 func Process(source string) *ProcessResult {
+	analysis := logic.AnalyzeSourceForTools(source)
 	c := &parserContext{
 		version:  1,
 		ops:      []Op{},
@@ -3510,7 +3511,7 @@ func Process(source string) *ProcessResult {
 		defs:     []*labelSymbol{},
 	}
 
-	ts, lines := readSourceLines(c, source)
+	ts, lines := readAnalyzedSourceLines(c, analysis.Lines)
 
 	var ops []Token
 	var lsyms []*labelSymbol
@@ -3594,28 +3595,7 @@ func Process(source string) *ProcessResult {
 							min = info.SigVersion
 						}
 
-						// TODO: the mode / version check rules need refactoring (into linter?)
-						if min == 0 {
-							c.diag = append(c.diag, lintError{
-								error: errors.Errorf("opcode not available in the current mode: %s", c.mode),
-								l:     curr.l,
-								b:     curr.b,
-								e:     curr.e,
-								s:     DiagErr,
-								r:     OpCodeAvailabilityInModeRuleInstance.Id(),
-							})
-						}
-
 						if min > c.version {
-							c.diag = append(c.diag, lintError{
-								error: errors.Errorf("opcode requires version >= %d (current: %d)", min, c.version),
-								l:     curr.l,
-								b:     curr.b,
-								e:     curr.e,
-								s:     DiagErr,
-								r:     OpCodeVersionCompatibilityCheckRuleInstance.Id(),
-							})
-
 							var ln = Line{
 								Tokens: c.args.ts,
 							}
@@ -3672,18 +3652,6 @@ func Process(source string) *ProcessResult {
 	linter := &Linter{l: c.lintlops}
 	linter.Lint()
 
-	for _, le := range linter.errs {
-		ln := lines[le.Line()]
-		c.diag = append(c.diag, lintError{
-			error: le,
-			l:     le.Line(),
-			b:     ln.SublineBegin(le.Subline()),
-			e:     ln.SublineEnd(le.Subline()),
-			s:     le.Severity(),
-			r:     le.Rule(),
-		})
-	}
-
 	symm := map[string]bool{}
 	for _, sym := range lsyms {
 		symm[sym.Name()] = true
@@ -3719,32 +3687,31 @@ func Process(source string) *ProcessResult {
 		syms[i+len(lsyms)] = c.defs[i]
 	}
 
-	os, err := logic.AssembleString(source)
-
 	result := &ProcessResult{
-		Mode:          c.mode,
-		Version:       c.version,
-		VersionToken:  c.vtok,
-		Diagnostics:   c.diag,
-		MissRefs:      mrefs,
-		Symbols:       syms,
-		SymbolRefs:    c.refs,
-		Tokens:        ts,
-		Lines:         lines,
-		Listing:       c.ops,
-		Sublisting:    c.lops,
-		Ops:           ops,
-		Numbers:       c.nums,
-		Bools:         c.bools,
-		Strings:       c.strs,
-		Keywords:      c.keys,
-		Macros:        c.mcrs,
-		Redundants:    linter.reds,
-		Versions:      vers,
-		RefCounts:     c.refc,
-		Defines:       c.defines,
-		OpStream:      os,
-		AssembleError: err,
+		Mode:                 c.mode,
+		Version:              c.version,
+		VersionToken:         c.vtok,
+		MissRefs:             mrefs,
+		Symbols:              syms,
+		SymbolRefs:           c.refs,
+		Tokens:               ts,
+		Lines:                lines,
+		Listing:              c.ops,
+		Sublisting:           c.lops,
+		Ops:                  ops,
+		Numbers:              c.nums,
+		Bools:                c.bools,
+		Strings:              c.strs,
+		Keywords:             c.keys,
+		Macros:               c.mcrs,
+		Redundants:           linter.reds,
+		Versions:             vers,
+		RefCounts:            c.refc,
+		Defines:              c.defines,
+		SourceLines:          analysis.Lines,
+		AssemblerDiagnostics: analysis.Diagnostics,
+		OpStream:             analysis.OpStream,
+		AssembleError:        analysis.Err,
 	}
 
 	return result
