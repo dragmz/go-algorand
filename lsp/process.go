@@ -10,19 +10,16 @@ import (
 type ProcessResult struct {
 	Mode logic.RunMode
 
-	Version      uint64
-	VersionToken *Token
+	Version uint64
 
-	MissRefs   []Token
 	Symbols    []Symbol
 	SymbolRefs []Token
-
-	Redundants []RedundantLine
 
 	RefCounts map[string]int
 	Defines   map[string]bool
 
 	SourceLines          []logic.SourceLine
+	SourceIndex          logic.SourceIndex
 	SourceProgram        logic.SourceProgram
 	AssemblerDiagnostics []logic.SourceDiagnostic
 	OpStream             *logic.OpStream
@@ -246,14 +243,12 @@ func Process(source string) *ProcessResult {
 	return &ProcessResult{
 		Mode:                 mode,
 		Version:              analysis.Index.Version,
-		VersionToken:         versionTokenFromSourceIndex(analysis.Lines, analysis.Index),
-		MissRefs:             referencesFromSourceIndex(analysis.Lines, analysis.Index.MissingReferences),
 		Symbols:              symbolsFromSourceIndex(analysis.Lines, analysis.Index),
 		SymbolRefs:           referencesFromSourceIndex(analysis.Lines, analysis.Index.References),
-		Redundants:           redundantsFromSourceIndex(analysis.Index),
 		RefCounts:            analysis.Index.RefCounts,
 		Defines:              definesFromSourceIndex(analysis.Index),
 		SourceLines:          analysis.Lines,
+		SourceIndex:          analysis.Index,
 		SourceProgram:        analysis.Program,
 		AssemblerDiagnostics: analysis.Diagnostics,
 		OpStream:             analysis.OpStream,

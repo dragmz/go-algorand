@@ -37,8 +37,8 @@ func TestProcessEmpty(t *testing.T) {
 	assert.Equal(t, logic.ModeApp, res.Mode)
 	assert.Equal(t, uint64(1), res.Version)
 
-	assert.Equal(t, 0, len(res.MissRefs))
-	assert.Equal(t, 0, len(res.Redundants))
+	assert.Equal(t, 0, len(res.SourceIndex.MissingReferences))
+	assert.Equal(t, 0, len(res.SourceIndex.Redundants))
 	assert.Equal(t, 0, len(res.RefCounts))
 	assert.Equal(t, 0, len(res.SourceLines))
 	assert.Equal(t, 0, len(res.SourceProgram.Operations))
@@ -51,25 +51,25 @@ func TestProcessEmpty(t *testing.T) {
 func TestRedundantLabelLine(t *testing.T) {
 	res := Process("test_label:")
 
-	assert.Len(t, res.Redundants, 1)
+	assert.Len(t, res.SourceIndex.Redundants, 1)
 
-	r := res.Redundants[0]
+	r := res.SourceIndex.Redundants[0]
 
-	assert.Equal(t, 0, r.Line())
-	assert.Equal(t, "Remove label 'test_label'", r.String())
+	assert.Equal(t, 0, r.Line)
+	assert.Equal(t, "Remove label 'test_label'", r.Message)
 }
 
 func TestRedundantBCallLine(t *testing.T) {
 	res := Process("b a\na:")
 
-	if len(res.Redundants) != 1 {
+	if len(res.SourceIndex.Redundants) != 1 {
 		t.Error("len mismatch")
 	}
 
-	r := res.Redundants[0]
+	r := res.SourceIndex.Redundants[0]
 
-	assert.Equal(t, 0, r.Line())
-	assert.Equal(t, "Remove b call", r.String())
+	assert.Equal(t, 0, r.Line)
+	assert.Equal(t, "Remove b call", r.Message)
 }
 
 func TestIntArgVals(t *testing.T) {

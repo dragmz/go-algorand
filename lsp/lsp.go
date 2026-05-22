@@ -476,11 +476,6 @@ type tealRemoveLabelCommandArgs struct {
 	Name string `json:"name"`
 }
 
-type tealRemoveLineCommandArgs struct {
-	Uri  string `json:"uri"`
-	Line int    `json:"line"`
-}
-
 type tealRemoveCallCommandArgs struct {
 	Uri       string `json:"uri"`
 	Line      int    `json:"line"`
@@ -668,11 +663,6 @@ type LspDiagnostic struct {
 	Range    LspRange `json:"range"`
 	Severity *int     `json:"severity,omitempty"`
 	Message  string   `json:"message"`
-}
-
-type lspPublishDiagnostic struct {
-	Uri         string          `json:"uri"`
-	Diagnostics []LspDiagnostic `json:"diagnostics"`
 }
 
 type lspNotification struct {
@@ -883,13 +873,6 @@ func (l *lsp) notify(method string, params interface{}) error {
 		JsonRpc: "2.0",
 		Method:  method,
 		Params:  params,
-	})
-}
-
-func (l *lsp) notifyDiagnostics(uri string, lds []LspDiagnostic) error {
-	return l.notify("textDocument/publishDiagnostics", lspPublishDiagnostic{
-		Uri:         uri,
-		Diagnostics: lds,
 	})
 }
 
@@ -1156,9 +1139,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				}
 
 				res := doc.Results()
-
 				edits := []lspTextEdit{
-					prepareVersionEdit(res.VersionToken, arg.Version),
+					sourceEditToLSP(res.SourceLines, logic.SourceEditUpdateVersionForTools(res.SourceIndex, arg.Version)),
 				}
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
@@ -1269,12 +1251,18 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					})
 				}
 
-				res := doc.Results()
-
 				line := arg.Line
 				statement := arg.Statement
+				res := doc.Results()
+				edit, ok := logic.SourceEditRemoveStatementForTools(res.SourceLines, line, statement)
+				if !ok {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeInvalidParams,
+						Message: errors.New("statement not found").Error(),
+					})
+				}
 
-				edits := []lspTextEdit{prepareRemoveStatementEdit(res, line, statement)}
+				edits := []lspTextEdit{sourceEditToLSP(res.SourceLines, edit)}
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: "Remove call",
@@ -1328,11 +1316,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				name := arg.Name
 
-				edits := []lspTextEdit{}
-
-				for _, sym := range res.SymByName(body.Params.Arguments[0].Name) {
-					edits = append(edits, prepareRemoveSymbolEdit(sym))
-				}
+				edits := sourceEditsToLSP(res.SourceLines, logic.SourceEditsRemoveSymbolForTools(res.SourceIndex, body.Params.Arguments[0].Name))
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: fmt.Sprintf("Remove label: %s", name),
@@ -1395,9 +1379,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
 									Uri: arg.Uri,
 								},
-								Edits: []lspTextEdit{
-									prepareCreateSymbolEdit(len(res.SourceLines), name),
-								},
+								Edits: sourceEditsToLSP(res.SourceLines, []logic.SourceEdit{logic.SourceEditCreateLabelForTools(res.SourceLines, name)}),
 							},
 						},
 					},
@@ -1517,23 +1499,11 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			chs := []lspTextEdit{}
 
 			for _, edited := range res.SymbolsWithin(req.Params.Position) {
-				for _, sym := range res.SymByName(edited.Name()) {
-					chs = append(chs, prepareRenameSymbolEdit(sym, req.Params.NewName))
-				}
-
-				for _, ref := range res.SymRefByName(edited.Name()) {
-					chs = append(chs, prepareRenameSymbolRefEdit(ref, req.Params.NewName))
-				}
+				chs = append(chs, sourceEditsToLSP(res.SourceLines, logic.SourceEditsRenameSymbolForTools(res.SourceIndex, edited.Name(), req.Params.NewName))...)
 			}
 
 			for _, edited := range res.SymbolRefsWithin(req.Params.Position) {
-				for _, sym := range res.SymByName(edited.String()) {
-					chs = append(chs, prepareRenameSymbolEdit(sym, req.Params.NewName))
-				}
-
-				for _, ref := range res.SymRefByName(edited.String()) {
-					chs = append(chs, prepareRenameSymbolRefEdit(ref, req.Params.NewName))
-				}
+				chs = append(chs, sourceEditsToLSP(res.SourceLines, logic.SourceEditsRenameSymbolForTools(res.SourceIndex, edited.String(), req.Params.NewName))...)
 			}
 
 			message := fmt.Sprintf("Renamed %d locations", len(chs))
@@ -2004,144 +1974,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, red := range res.Redundants {
-					if req.Params.Range.Start.Line <= red.Line() && req.Params.Range.End.Line >= red.Line() {
-						kind := "quickfix"
-						title := red.String()
-
-						cas = append(cas, lspCodeAction{
-							Title: title,
-							Kind:  &kind,
-							Command: &LspCommand{
-								Title:   title,
-								Command: "teal.call.remove",
-								Arguments: []interface{}{
-									tealRemoveCallCommandArgs{
-										Uri:       req.Params.TextDocument.Uri,
-										Line:      red.Line(),
-										Statement: red.Statement(),
-									},
-								},
-							},
-						})
-					}
-				}
-
-				for _, ref := range res.MissRefs {
-					if !Overlaps(req.Params.Range, ref) {
-						continue
-					}
-
-					kind := "quickfix"
-					cas = append(cas, lspCodeAction{
-						Title: fmt.Sprintf("Create label '%s'", ref.String()),
-						Kind:  &kind,
-						Command: &LspCommand{
-							Title:   "Create label",
-							Command: "teal.label.create",
-							Arguments: []interface{}{
-								tealCreateLabelCommandArgs{
-									Uri:  req.Params.TextDocument.Uri,
-									Name: ref.String(),
-								},
-							},
-						},
-					})
-				}
-
-				hs := logic.SourceInlayHintsForTools(res.SourceLines, res.SourceProgram)
-
-				for _, named := range hs {
-					if named.Kind != logic.SourceInlayHintNamed {
-						continue
-					}
-					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, named.Token)
-					if !ok || !Overlaps(req.Params.Range, tok) {
-						continue
-					}
-					kind := "quickfix"
-					cas = append(cas, lspCodeAction{
-						Title: fmt.Sprintf("Replace with '%s'", named.Label),
-						Kind:  &kind,
-						Command: &LspCommand{
-							Title:   "Replace with named const",
-							Command: "teal.value.replace",
-							Arguments: []interface{}{
-								tealReplaceValueCommandArgs{
-									Uri: req.Params.TextDocument.Uri,
-									Range: LspRange{
-										Start: LspPosition{
-											Line:      tok.Line(),
-											Character: tok.Begin(),
-										},
-										End: LspPosition{
-											Line:      tok.Line(),
-											Character: tok.End(),
-										},
-									},
-									Value: named.Label,
-								},
-							},
-						},
-					})
-				}
-
-				for _, named := range hs {
-					if named.Kind != logic.SourceInlayHintDecoded {
-						continue
-					}
-					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, named.Token)
-					if !ok || !Overlaps(req.Params.Range, tok) {
-						continue
-					}
-					kind := "quickfix"
-					cas = append(cas, lspCodeAction{
-						Title: fmt.Sprintf("Replace with literal '%s'", named.Label),
-						Kind:  &kind,
-						Command: &LspCommand{
-							Title:   "Replace with literal",
-							Command: "teal.value.replace",
-							Arguments: []interface{}{
-								tealReplaceValueCommandArgs{
-									Uri: req.Params.TextDocument.Uri,
-									Range: LspRange{
-										Start: LspPosition{
-											Line:      tok.Line(),
-											Character: tok.Begin(),
-										},
-										End: LspPosition{
-											Line:      tok.Line(),
-											Character: tok.End(),
-										},
-									},
-									Value: fmt.Sprintf("\"%s\"", strings.ReplaceAll(named.Label, "\"", "\\\"")),
-								},
-							},
-						},
-					})
-				}
-
-				{
-					kind := "quickfix"
-					for _, v := range res.SourceProgram.RequiredVersions {
-						rg, ok := tokenFromSourceRequiredVersion(res.SourceLines, v)
-						if ok && Overlaps(req.Params.Range, rg) {
-							cas = append(cas, lspCodeAction{
-								Title: fmt.Sprintf("Update version to %d", v.Version),
-								Kind:  &kind,
-								Command: &LspCommand{
-									Title:   "Update version",
-									Command: "teal.version.update",
-									Arguments: []interface{}{
-										tealUpdateVersion{
-											Uri:     req.Params.TextDocument.Uri,
-											Version: v.Version,
-										},
-									},
-								},
-							})
-						}
-					}
+				rg := sourceRangeFromLSP(res.SourceLines, req.Params.Range)
+				for _, action := range logic.SourceActionsForTools(res.SourceLines, res.SourceIndex, res.SourceProgram, rg) {
+					cas = append(cas, sourceActionToLSP(req.Params.TextDocument.Uri, res.SourceLines, action))
 				}
 			}
 
@@ -2432,54 +2267,74 @@ func prepareReplaceAllTextEdit(lines int, formatted string) lspTextEdit {
 	}
 }
 
-func prepareRenameSymbolRefEdit(ref Token, newName string) lspTextEdit {
-	return lspTextEdit{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      ref.Line(),
-				Character: ref.Begin(),
-			},
-			End: LspPosition{
-				Line:      ref.Line(),
-				Character: ref.End(),
-			},
-		},
-		NewText: newName,
+func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.SourceAction) lspCodeAction {
+	kind := "quickfix"
+	edit := workspaceEditFromSourceEdits(uri, lines, action.Edits)
+	return lspCodeAction{
+		Title: action.Title,
+		Kind:  &kind,
+		Edit:  &edit,
 	}
 }
 
-func prepareRenameSymbolEdit(sym Symbol, newName string) lspTextEdit {
-	return lspTextEdit{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      sym.Line(),
-				Character: sym.Begin(),
-			},
-			End: LspPosition{
-				Line:      sym.Line(),
-				Character: sym.Begin() + utf16LenString(sym.Name()),
+func workspaceEditFromSourceEdits(uri string, lines []logic.SourceLine, edits []logic.SourceEdit) lspWorkspaceEdit {
+	return lspWorkspaceEdit{
+		DocumentChanges: []lspTextDocumentEdit{
+			{
+				TextDocument: lspOptionalVersionedTextDocumentIdentifier{
+					Uri: uri,
+				},
+				Edits: sourceEditsToLSP(lines, edits),
 			},
 		},
-		NewText: newName,
 	}
 }
 
-func prepareCreateSymbolEdit(lines int, name string) lspTextEdit {
-	s := fmt.Sprintf("\r\n%s:\r\n", name)
+func sourceEditsToLSP(lines []logic.SourceLine, edits []logic.SourceEdit) []lspTextEdit {
+	lspEdits := make([]lspTextEdit, 0, len(edits))
+	for _, edit := range edits {
+		lspEdits = append(lspEdits, sourceEditToLSP(lines, edit))
+	}
+	return lspEdits
+}
 
+func sourceEditToLSP(lines []logic.SourceLine, edit logic.SourceEdit) lspTextEdit {
 	return lspTextEdit{
 		Range: LspRange{
 			Start: LspPosition{
-				Line:      lines,
-				Character: 0,
+				Line:      edit.Line,
+				Character: sourceEditUTF16Column(lines, edit.Line, edit.Column),
 			},
 			End: LspPosition{
-				Line:      lines,
-				Character: utf16LenString(s),
+				Line:      edit.EndLine,
+				Character: sourceEditUTF16Column(lines, edit.EndLine, edit.EndColumn),
 			},
 		},
-		NewText: s,
+		NewText: edit.NewText,
 	}
+}
+
+func sourceRangeFromLSP(lines []logic.SourceLine, rg LspRange) logic.SourceRange {
+	return logic.SourceRange{
+		Line:      rg.Start.Line,
+		Column:    sourceRangeByteColumn(lines, rg.Start.Line, rg.Start.Character),
+		EndLine:   rg.End.Line,
+		EndColumn: sourceRangeByteColumn(lines, rg.End.Line, rg.End.Character),
+	}
+}
+
+func sourceEditUTF16Column(lines []logic.SourceLine, line int, column int) int {
+	if line < 0 || line >= len(lines) {
+		return column
+	}
+	return utf16ColumnFromByte(lines[line].Text, column)
+}
+
+func sourceRangeByteColumn(lines []logic.SourceLine, line int, character int) int {
+	if line < 0 || line >= len(lines) {
+		return character
+	}
+	return byteColumnFromUTF16Column(lines[line].Text, character)
 }
 
 // utf16LenString returns the number of UTF-16 code units required to
@@ -2495,22 +2350,6 @@ func utf16LenString(s string) int {
 		}
 	}
 	return cnt
-}
-
-func prepareRemoveSymbolEdit(sym Symbol) lspTextEdit {
-	return lspTextEdit{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      sym.Line(),
-				Character: sym.Begin(),
-			},
-			End: LspPosition{
-				Line:      sym.Line(),
-				Character: sym.End(),
-			},
-		},
-		NewText: "",
-	}
 }
 
 func prepareSymbolRefSemToken(s Token) SemanticToken {
@@ -2688,80 +2527,6 @@ func sourceDiagnosticSeverityToLSP(severity logic.SourceDiagnosticSeverity) Diag
 		return DiagWarn
 	default:
 		return DiagErr
-	}
-}
-
-func prepareRemoveLineEdit(line int) lspTextEdit {
-	return lspTextEdit{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      line,
-				Character: 0,
-			},
-			End: LspPosition{
-				Line:      line + 1,
-				Character: 0,
-			},
-		},
-		NewText: "",
-	}
-}
-
-func prepareRemoveStatementEdit(res *ProcessResult, line int, statement int) lspTextEdit {
-	b := 0
-	e := 0
-	if line >= 0 && line < len(res.SourceLines) {
-		statements := res.SourceLines[line].Statements
-		if statement >= 0 && statement < len(statements) {
-			b = utf16ColumnFromByte(res.SourceLines[line].Text, statements[statement].Column)
-			e = utf16ColumnFromByte(res.SourceLines[line].Text, statements[statement].EndColumn)
-		}
-	}
-
-	return lspTextEdit{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      line,
-				Character: b,
-			},
-			End: LspPosition{
-				Line:      line,
-				Character: e,
-			},
-		},
-		NewText: "",
-	}
-}
-
-func prepareVersionEdit(rg Range, version uint64) lspTextEdit {
-	if rg != nil {
-		return lspTextEdit{
-			Range: LspRange{
-				Start: LspPosition{
-					Line:      rg.StartLine(),
-					Character: rg.StartCharacter(),
-				},
-				End: LspPosition{
-					Line:      rg.EndLine(),
-					Character: rg.EndCharacter(),
-				},
-			},
-			NewText: fmt.Sprintf("%d", version),
-		}
-	} else {
-		return lspTextEdit{
-			Range: LspRange{
-				Start: LspPosition{
-					Line:      0,
-					Character: 0,
-				},
-				End: LspPosition{
-					Line:      0,
-					Character: 0,
-				},
-			},
-			NewText: fmt.Sprintf("#pragma version %d\r\n", version),
-		}
 	}
 }
 
