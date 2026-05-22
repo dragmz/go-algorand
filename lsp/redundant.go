@@ -9,7 +9,7 @@ type position struct {
 
 type RedundantLine interface {
 	Line() int
-	Subline() int
+	Statement() int
 	String() string
 }
 
@@ -22,7 +22,7 @@ func (l RedundantLabelLine) Line() int {
 	return l.p.l
 }
 
-func (l RedundantLabelLine) Subline() int {
+func (l RedundantLabelLine) Statement() int {
 	return l.p.s
 }
 
@@ -38,7 +38,7 @@ func (l RedundantBLine) Line() int {
 	return l.p.l
 }
 
-func (l RedundantBLine) Subline() int {
+func (l RedundantBLine) Statement() int {
 	return l.p.s
 }
 

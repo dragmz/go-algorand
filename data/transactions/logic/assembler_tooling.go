@@ -139,6 +139,7 @@ type SourceOperation struct {
 	Name            string
 	CanonicalName   string
 	Token           SourceToken
+	Statement       int
 	EndColumn       int
 	ToolArgs        []ToolArg
 	Args            []SourceArgument
@@ -160,6 +161,39 @@ type SourceProgram struct {
 	Operations       []SourceOperation
 	RequiredVersions []SourceRequiredVersion
 	TokenClasses     []SourceTokenClass
+}
+
+// SourceCompletionMode identifies whether completion should offer opcodes or
+// arguments at a source position.
+type SourceCompletionMode int
+
+const (
+	SourceCompletionOpcode SourceCompletionMode = iota
+	SourceCompletionArgument
+)
+
+// SourceCompletionContext describes editor completion at a byte-column source
+// position.
+type SourceCompletionContext struct {
+	Mode           SourceCompletionMode
+	Prefix         string
+	Statement      SourceStatement
+	StatementIndex int
+}
+
+// SourceInlayHintKind classifies assembler-native inlay hints.
+type SourceInlayHintKind int
+
+const (
+	SourceInlayHintNamed SourceInlayHintKind = iota
+	SourceInlayHintDecoded
+)
+
+// SourceInlayHint is an editor hint tied to a source token.
+type SourceInlayHint struct {
+	Kind  SourceInlayHintKind
+	Token SourceToken
+	Label string
 }
 
 type toolOpcodeOverlay struct {
@@ -635,7 +669,7 @@ func sourceProgramForTools(lines []SourceLine, idx SourceIndex, opts SourceToolO
 	program := SourceProgram{}
 	activeDefines := make(map[string]bool)
 	for _, line := range lines {
-		for _, statement := range line.Statements {
+		for statementIndex, statement := range line.Statements {
 			opToken, argTokens, ok := sourceOperationTokens(statement)
 			if !ok {
 				continue
@@ -661,6 +695,7 @@ func sourceProgramForTools(lines []SourceLine, idx SourceIndex, opts SourceToolO
 				Name:          op.Name,
 				CanonicalName: op.CanonicalName,
 				Token:         opToken,
+				Statement:     statementIndex,
 				EndColumn:     sourceOperationEndColumn(opToken, argTokens),
 				ToolArgs:      op.Args,
 				Args:          sourceArgumentsForTools(op.Name, op.Args, argTokens, version, mode, activeDefines),
@@ -682,6 +717,137 @@ func sourceProgramForTools(lines []SourceLine, idx SourceIndex, opts SourceToolO
 		}
 	}
 	return program
+}
+
+// SourceStatementAtForTools returns the statement at a byte-column source
+// position.
+func SourceStatementAtForTools(lines []SourceLine, line int, column int) (SourceStatement, int, bool) {
+	if line < 0 || line >= len(lines) {
+		return SourceStatement{}, 0, false
+	}
+	statements := lines[line].Statements
+	if len(statements) == 0 {
+		return SourceStatement{}, 0, false
+	}
+	if column <= statements[0].Column {
+		return statements[0], 0, true
+	}
+	lastIndex := len(statements) - 1
+	if column >= statements[lastIndex].EndColumn {
+		return statements[lastIndex], lastIndex, true
+	}
+	for i, statement := range statements {
+		if column >= statement.Column && column <= statement.EndColumn {
+			return statement, i, true
+		}
+	}
+	return SourceStatement{}, 0, false
+}
+
+// SourceOperationAtForTools returns the operation at a byte-column source
+// position.
+func SourceOperationAtForTools(lines []SourceLine, program SourceProgram, line int, column int) (SourceOperation, bool) {
+	if line < 0 || line >= len(lines) {
+		return SourceOperation{}, false
+	}
+	for _, op := range program.Operations {
+		if op.Token.Line != line {
+			continue
+		}
+		if column >= op.Token.Column && column <= op.EndColumn+1 {
+			return op, true
+		}
+	}
+	return SourceOperation{}, false
+}
+
+// SourceToolArgAtForTools returns the source-level argument role at a
+// byte-column source position.
+func SourceToolArgAtForTools(lines []SourceLine, program SourceProgram, line int, column int) (ToolArg, int, bool) {
+	var res ToolArg
+	op, ok := SourceOperationAtForTools(lines, program, line, column)
+	if !ok {
+		return res, -1, false
+	}
+	for idx, arg := range op.Args {
+		if column >= arg.Token.Column && column <= arg.Token.EndColumn {
+			return arg.ToolArg, idx, true
+		}
+	}
+	if len(op.ToolArgs) == 0 {
+		return res, -1, false
+	}
+	idx := len(op.Args)
+	if idx >= len(op.ToolArgs) {
+		idx = len(op.ToolArgs) - 1
+	}
+	return op.ToolArgs[idx], idx, true
+}
+
+// SourceCompletionContextForTools returns opcode-or-argument completion context
+// at a byte-column source position.
+func SourceCompletionContextForTools(lines []SourceLine, program SourceProgram, line int, column int) SourceCompletionContext {
+	statement, statementIndex, ok := SourceStatementAtForTools(lines, line, column)
+	if !ok || len(statement.Tokens) == 0 {
+		return SourceCompletionContext{Mode: SourceCompletionOpcode, Statement: statement, StatementIndex: statementIndex}
+	}
+	first := statement.Tokens[0]
+	if column <= first.EndColumn {
+		return SourceCompletionContext{
+			Mode:           SourceCompletionOpcode,
+			Prefix:         first.Text,
+			Statement:      statement,
+			StatementIndex: statementIndex,
+		}
+	}
+	return SourceCompletionContext{
+		Mode:           SourceCompletionArgument,
+		Statement:      statement,
+		StatementIndex: statementIndex,
+	}
+}
+
+// SourceInlayHintsForTools returns assembler-native inlay hints.
+func SourceInlayHintsForTools(lines []SourceLine, program SourceProgram) []SourceInlayHint {
+	var hints []SourceInlayHint
+	seenDecoded := make(map[SourceToken]bool)
+	for _, op := range program.Operations {
+		for _, arg := range op.Args {
+			if arg.Token.Line < 0 || arg.Token.Line >= len(lines) {
+				continue
+			}
+			if arg.HasValue && arg.ValueName != "" && arg.Token.Text != arg.ValueName {
+				hints = append(hints, SourceInlayHint{
+					Kind:  SourceInlayHintNamed,
+					Token: arg.Token,
+					Label: arg.ValueName,
+				})
+			}
+			if decoded, ok := DecodedHexStringForTools(arg.Token.Text); ok {
+				seenDecoded[arg.Token] = true
+				hints = append(hints, SourceInlayHint{
+					Kind:  SourceInlayHintDecoded,
+					Token: arg.Token,
+					Label: decoded,
+				})
+			}
+		}
+	}
+	for _, line := range lines {
+		for _, token := range line.Tokens {
+			if seenDecoded[token] {
+				continue
+			}
+			if decoded, ok := DecodedHexStringForTools(token.Text); ok {
+				hints = append(hints, SourceInlayHint{
+					Kind:  SourceInlayHintDecoded,
+					Token: token,
+					Label: decoded,
+				})
+			}
+		}
+	}
+	return hints
 }
 
 func sourceOperationTokens(statement SourceStatement) (SourceToken, []SourceToken, bool) {

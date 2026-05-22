@@ -101,6 +101,12 @@ func TestUtf16LenString(t *testing.T) {
 	}
 }
 
+func TestByteColumnFromUTF16Column(t *testing.T) {
+	assert.Equal(t, len("int "), byteColumnFromUTF16Column("int 😀", 4))
+	assert.Equal(t, len("int 😀"), byteColumnFromUTF16Column("int 😀", 6))
+	assert.Equal(t, len("int 😀"), byteColumnFromUTF16Column("int 😀", 99))
+}
+
 func TestSourceDiagnosticToLSP(t *testing.T) {
 	lines := logic.SourceLinesForTools("int 😀")
 	diag := sourceDiagnosticToLSP(lines, logic.SourceDiagnostic{

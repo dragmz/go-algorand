@@ -91,6 +91,74 @@ func TestDecodedHexStringForTools(t *testing.T) {
 	require.Equal(t, "01", decoded)
 }
 
+func TestSourceStatementAtForTools(t *testing.T) {
+	lines := SourceLinesForTools("int 1; int 2\n;;;")
+
+	statement, idx, ok := SourceStatementAtForTools(lines, 0, 0)
+	require.True(t, ok)
+	require.Equal(t, 0, idx)
+	require.Equal(t, "int", statement.Tokens[0].Text)
+
+	statement, idx, ok = SourceStatementAtForTools(lines, 0, 8)
+	require.True(t, ok)
+	require.Equal(t, 1, idx)
+	require.Equal(t, "int", statement.Tokens[0].Text)
+
+	statement, idx, ok = SourceStatementAtForTools(lines, 1, 2)
+	require.True(t, ok)
+	require.Equal(t, 2, idx)
+	require.Empty(t, statement.Tokens)
+
+	lines = SourceLinesForTools("byte \"😀\"; int 2")
+	statement, idx, ok = SourceStatementAtForTools(lines, 0, len("byte \"😀\"; "))
+	require.True(t, ok)
+	require.Equal(t, 1, idx)
+	require.Equal(t, "int", statement.Tokens[0].Text)
+}
+
+func TestSourceCompletionContextForTools(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("txn Sender; int ", SourceToolOptions{Mode: ModeApp})
+
+	ctx := SourceCompletionContextForTools(result.Lines, result.Program, 0, 1)
+	require.Equal(t, SourceCompletionOpcode, ctx.Mode)
+	require.Equal(t, "txn", ctx.Prefix)
+
+	ctx = SourceCompletionContextForTools(result.Lines, result.Program, 0, len("txn "))
+	require.Equal(t, SourceCompletionArgument, ctx.Mode)
+
+	ctx = SourceCompletionContextForTools(result.Lines, result.Program, 0, len("txn Sender; "))
+	require.Equal(t, SourceCompletionOpcode, ctx.Mode)
+	require.Equal(t, "int", ctx.Prefix)
+}
+
+func TestSourceToolArgAtForTools(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("txn Sender", SourceToolOptions{Mode: ModeApp})
+
+	arg, idx, ok := SourceToolArgAtForTools(result.Lines, result.Program, 0, len("txn S"))
+	require.True(t, ok)
+	require.Equal(t, 0, idx)
+	require.Equal(t, ToolArgField, arg.Kind)
+	require.Equal(t, ToolFieldTxn, arg.FieldGroup)
+}
+
+func TestSourceInlayHintsForTools(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("txn 0\nbyte 0x3031", SourceToolOptions{Mode: ModeApp})
+
+	hints := SourceInlayHintsForTools(result.Lines, result.Program)
+	var named, decoded bool
+	for _, hint := range hints {
+		switch hint.Kind {
+		case SourceInlayHintNamed:
+			named = named || hint.Label == "Sender"
+		case SourceInlayHintDecoded:
+			decoded = decoded || hint.Label == "01"
+		default:
+		}
+	}
+	require.True(t, named)
+	require.True(t, decoded)
+}
+
 func toolOpcodeNamesForTest(ops []ToolOpcode) map[string]bool {
 	names := make(map[string]bool)
 	for _, op := range ops {

@@ -37,19 +37,15 @@ func TestProcessEmpty(t *testing.T) {
 	assert.Equal(t, logic.ModeApp, res.Mode)
 	assert.Equal(t, uint64(1), res.Version)
 
-	assert.Equal(t, 0, len(res.Keywords))
-	assert.Equal(t, 0, len(res.Lines))
-	assert.Equal(t, 0, len(res.Macros))
 	assert.Equal(t, 0, len(res.MissRefs))
-	assert.Equal(t, 0, len(res.Numbers))
-	assert.Equal(t, 0, len(res.Ops))
 	assert.Equal(t, 0, len(res.Redundants))
 	assert.Equal(t, 0, len(res.RefCounts))
-	assert.Equal(t, 0, len(res.Strings))
+	assert.Equal(t, 0, len(res.SourceLines))
+	assert.Equal(t, 0, len(res.SourceProgram.Operations))
+	assert.Equal(t, 0, len(res.SourceProgram.RequiredVersions))
+	assert.Equal(t, 0, len(res.SourceProgram.TokenClasses))
 	assert.Equal(t, 0, len(res.SymbolRefs))
 	assert.Equal(t, 0, len(res.Symbols))
-	assert.Equal(t, 0, len(res.Tokens))
-	assert.Equal(t, 0, len(res.Versions))
 }
 
 func TestRedundantLabelLine(t *testing.T) {
@@ -79,7 +75,11 @@ func TestRedundantBCallLine(t *testing.T) {
 func TestIntArgVals(t *testing.T) {
 	res := Process("int ")
 
-	vals := res.ArgValsAt(0, 4)
+	arg, _, ok := logic.SourceToolArgAtForTools(res.SourceLines, res.SourceProgram, 0, res.sourceColumn(0, 4))
+	if !assert.True(t, ok) {
+		return
+	}
+	vals := res.ArgVals(arg)
 
 	m := map[string]bool{}
 	for _, v := range vals {
@@ -165,12 +165,18 @@ func TestInlayHints(t *testing.T) {
 		name := fmt.Sprintf("test #%d", i)
 
 		res := Process(ts)
-		ihs := res.InlayHints(testRange{0, 0, 1, 0})
+		ihs := logic.SourceInlayHintsForTools(res.SourceLines, res.SourceProgram)
 
-		if !assert.Equal(t, 1, len(ihs.Decoded), name) {
+		var decoded []logic.SourceInlayHint
+		for _, hint := range ihs {
+			if hint.Kind == logic.SourceInlayHintDecoded {
+				decoded = append(decoded, hint)
+			}
+		}
+		if !assert.Equal(t, 1, len(decoded), name) {
 			return
 		}
-		assert.Equal(t, "01", ihs.Decoded[0].Value, name)
+		assert.Equal(t, "01", decoded[0].Label, name)
 	}
 }
 
@@ -186,9 +192,9 @@ func TestVersion(t *testing.T) {
 
 func TestRequiredVersion(t *testing.T) {
 	res := Process("box_create")
-	assert.Len(t, res.Versions, 1)
+	assert.Len(t, res.SourceProgram.RequiredVersions, 1)
 
-	v := res.Versions[0]
+	v := res.SourceProgram.RequiredVersions[0]
 	assert.Equal(t, uint64(8), v.Version)
 }
 
@@ -198,37 +204,37 @@ func TestInvalidByteInt(t *testing.T) {
 	int 1
 	int 2`)
 
-	assert.Len(t, res.Lines, 4)
-	assert.Len(t, res.Ops, 4)
+	assert.Len(t, res.SourceLines, 4)
+	assert.Len(t, res.SourceProgram.Operations, 4)
 }
 
 func TestSemicolon(t *testing.T) {
 	res := Process("int 1; int 2")
-	assert.Len(t, res.Lines, 1)
+	assert.Len(t, res.SourceLines, 1)
 
-	assert.Len(t, res.Lines[0].Subs, 2)
-	assert.Len(t, res.Lines[0].Subs[0].Tokens, 2)
-	assert.Len(t, res.Lines[0].Subs[1].Tokens, 2)
+	assert.Len(t, res.SourceLines[0].Statements, 2)
+	assert.Len(t, res.SourceLines[0].Statements[0].Tokens, 2)
+	assert.Len(t, res.SourceLines[0].Statements[1].Tokens, 2)
 
-	assert.Len(t, res.Lines[0].Tokens, 5)
+	assert.Len(t, res.SourceLines[0].Tokens, 5)
 }
 
 func TestSemicolonEmptySubs(t *testing.T) {
 	res := Process("int 1;")
-	assert.Len(t, res.Lines[0].Subs, 2)
+	assert.Len(t, res.SourceLines[0].Statements, 2)
 }
 
 func TestMultiSemicolon(t *testing.T) {
 	res := Process(";;;")
-	assert.Len(t, res.Lines, 1)
+	assert.Len(t, res.SourceLines, 1)
 
-	assert.Len(t, res.Lines[0].Subs, 4)
-	assert.Len(t, res.Lines[0].Subs[0].Tokens, 0)
-	assert.Len(t, res.Lines[0].Subs[1].Tokens, 0)
-	assert.Len(t, res.Lines[0].Subs[2].Tokens, 0)
-	assert.Len(t, res.Lines[0].Subs[3].Tokens, 0)
+	assert.Len(t, res.SourceLines[0].Statements, 4)
+	assert.Len(t, res.SourceLines[0].Statements[0].Tokens, 0)
+	assert.Len(t, res.SourceLines[0].Statements[1].Tokens, 0)
+	assert.Len(t, res.SourceLines[0].Statements[2].Tokens, 0)
+	assert.Len(t, res.SourceLines[0].Statements[3].Tokens, 0)
 
-	assert.Len(t, res.Lines[0].Tokens, 3)
+	assert.Len(t, res.SourceLines[0].Tokens, 3)
 }
 
 func TestAssemblerSourceTokenizationRegressions(t *testing.T) {
@@ -252,15 +258,15 @@ func TestAssemblerSourceTokenizationRegressions(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			res := Process(test.source)
-			if !assert.Len(t, res.Lines, 1) {
+			if !assert.Len(t, res.SourceLines, 1) {
 				return
 			}
-			if !assert.Len(t, res.Lines[0].Subs, 1) {
+			if !assert.Len(t, res.SourceLines[0].Statements, 1) {
 				return
 			}
 			var got []string
-			for _, token := range res.Lines[0].Subs[0].Tokens {
-				got = append(got, token.String())
+			for _, token := range res.SourceLines[0].Statements[0].Tokens {
+				got = append(got, token.Text)
 			}
 			assert.Equal(t, test.tokens, got)
 		})
@@ -325,20 +331,20 @@ func TestCompletion(t *testing.T) {
 func TestPragmaTypetrackTrue(t *testing.T) {
 	res := Process(`#pragma typetrack true`)
 
-	assert.Len(t, res.Macros, 2)
-	assert.Equal(t, 1, len(res.Bools))
+	assert.Len(t, sourceTokensByClass(res, logic.SourceTokenClassMacro), 2)
+	assert.Equal(t, 1, len(sourceTokensByClass(res, logic.SourceTokenClassBool)))
 }
 
 func TestPragmaTypetrackFalse(t *testing.T) {
 	res := Process(`#pragma typetrack false`)
 
-	assert.Len(t, res.Macros, 2)
-	assert.Equal(t, 1, len(res.Bools))
+	assert.Len(t, sourceTokensByClass(res, logic.SourceTokenClassMacro), 2)
+	assert.Equal(t, 1, len(sourceTokensByClass(res, logic.SourceTokenClassBool)))
 }
 
 func TestPragmaTypetrackInvalid(t *testing.T) {
 	res := Process(`#pragma typetrack test`)
-	assert.Empty(t, res.Bools)
+	assert.Empty(t, sourceTokensByClass(res, logic.SourceTokenClassBool))
 }
 
 func TestDefineRef(t *testing.T) {
@@ -374,7 +380,7 @@ func TestStringDoesConflictWithDefine(t *testing.T) {
 	#define VALUE "test"
 	byte "VALUE"`)
 
-	assert.Len(t, res.Strings, 1)
+	assert.Len(t, sourceTokensByClass(res, logic.SourceTokenClassString), 1)
 	assert.Len(t, res.Symbols, 1)
 	assert.Empty(t, res.SymbolRefs)
 }
@@ -412,14 +418,25 @@ func TestEmojiLabelAndBranch(t *testing.T) {
 			assert.Equal(t, name, refs[0].String())
 
 			// string token captured separately
-			if !assert.Len(t, res.Strings, 1) {
+			strings := sourceTokensByClass(res, logic.SourceTokenClassString)
+			if !assert.Len(t, strings, 1) {
 				return
 			}
-			assert.Equal(t, "\""+name+"\"", res.Strings[0].String())
+			assert.Equal(t, "\""+name+"\"", strings[0].Text)
 
 			// positions: token end should be begin + name units + trailing ':'
 			nameUnits := utf16LenString(sym.Name())
 			assert.Equal(t, sym.Begin()+nameUnits+1, sym.End())
 		})
 	}
+}
+
+func sourceTokensByClass(res *ProcessResult, kind logic.SourceTokenClassKind) []logic.SourceToken {
+	var tokens []logic.SourceToken
+	for _, class := range res.SourceProgram.TokenClasses {
+		if class.Kind == kind {
+			tokens = append(tokens, class.Token)
+		}
+	}
+	return tokens
 }

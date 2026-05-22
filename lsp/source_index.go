@@ -88,7 +88,7 @@ func (l sourceRedundantLine) Line() int {
 	return l.p.l
 }
 
-func (l sourceRedundantLine) Subline() int {
+func (l sourceRedundantLine) Statement() int {
 	return l.p.s
 }
 

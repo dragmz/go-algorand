@@ -482,9 +482,9 @@ type tealRemoveLineCommandArgs struct {
 }
 
 type tealRemoveCallCommandArgs struct {
-	Uri     string `json:"uri"`
-	Line    int    `json:"line"`
-	Subline int    `json:"subline"`
+	Uri       string `json:"uri"`
+	Line      int    `json:"line"`
+	Statement int    `json:"statement"`
 }
 
 type lspWorkspaceExecuteCommandHeader struct {
@@ -1272,9 +1272,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				res := doc.Results()
 
 				line := arg.Line
-				subline := arg.Subline
+				statement := arg.Statement
 
-				edits := []lspTextEdit{prepareRemoveSublineEdit(res, line, subline)}
+				edits := []lspTextEdit{prepareRemoveStatementEdit(res, line, statement)}
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: "Remove call",
@@ -1396,7 +1396,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 									Uri: arg.Uri,
 								},
 								Edits: []lspTextEdit{
-									prepareCreateSymbolEdit(len(res.Lines), name),
+									prepareCreateSymbolEdit(len(res.SourceLines), name),
 								},
 							},
 						},
@@ -1640,16 +1640,23 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				padding := new(bool)
 				*padding = true
 
-				hs := res.InlayHints(req.Params.Range)
+				hs := logic.SourceInlayHintsForTools(res.SourceLines, res.SourceProgram)
 
 				if l.config.InlayNamed {
-					for _, named := range hs.Named {
+					for _, named := range hs {
+						if named.Kind != logic.SourceInlayHintNamed {
+							continue
+						}
+						tok, ok := tokenFromSourceTokenInLines(res.SourceLines, named.Token)
+						if !ok || !Overlaps(tok, req.Params.Range) {
+							continue
+						}
 						ihs = append(ihs, LspInlayHint{
 							Position: LspPosition{
-								Line:      named.T.Line(),
-								Character: named.T.End(),
+								Line:      tok.Line(),
+								Character: tok.End(),
 							},
-							Label:       named.Name,
+							Label:       named.Label,
 							Kind:        parameter,
 							PaddingLeft: padding,
 						})
@@ -1657,13 +1664,20 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				}
 
 				if l.config.InlayDecoded {
-					for _, decoded := range hs.Decoded {
+					for _, decoded := range hs {
+						if decoded.Kind != logic.SourceInlayHintDecoded {
+							continue
+						}
+						tok, ok := tokenFromSourceTokenInLines(res.SourceLines, decoded.Token)
+						if !ok || !Overlaps(tok, req.Params.Range) {
+							continue
+						}
 						ihs = append(ihs, LspInlayHint{
 							Position: LspPosition{
-								Line:      decoded.T.Line(),
-								Character: decoded.T.End(),
+								Line:      tok.Line(),
+								Character: tok.End(),
 							},
-							Label:       decoded.Value,
+							Label:       decoded.Label,
 							Kind:        parameter,
 							PaddingLeft: padding,
 						})
@@ -1700,32 +1714,23 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				var ln Line
-
-				if len(res.Lines) > req.Params.Position.Line {
-					ln = res.Lines[req.Params.Position.Line]
-				}
-
-				sln := ln.SublineByIndex(req.Params.Position.Character)
-
 				var prefix string
-
 				mode := tealCompletionArg
-
-				if len(sln.Tokens) == 0 {
+				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+				ctx := logic.SourceCompletionContextForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
+				if ctx.Mode == logic.SourceCompletionOpcode {
 					mode = tealCompletionOp
-				} else {
-					if len(sln.Tokens) > 0 {
-						if req.Params.Position.Character <= sln.Tokens[0].End() {
-							mode = tealCompletionOp
-							prefix = sln.Tokens[0].String()
-						}
-					}
+					prefix = ctx.Prefix
 				}
 
 				switch mode {
 				case tealCompletionArg:
-					for _, v := range res.ArgValsAt(req.Params.Position.Line, req.Params.Position.Character) {
+					arg, _, ok := logic.SourceToolArgAtForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
+					var values []logic.ToolArgValue
+					if ok {
+						values = res.ArgVals(arg)
+					}
+					for _, v := range values {
 						var d *lspCompletionItemLabelDetails
 						if !v.NoValue {
 							d = &lspCompletionItemLabelDetails{
@@ -1924,7 +1929,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			if err == nil {
 				// TODO: implement formatting
 				formatted := doc.s
-				te = []lspTextEdit{prepareReplaceAllTextEdit(len(res.Lines), formatted)}
+				te = []lspTextEdit{prepareReplaceAllTextEdit(len(res.SourceLines), formatted)}
 			}
 
 			return l.success(h.Id, te)
@@ -1942,11 +1947,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				op, ok := res.OperationAt(req.Params.Position.Line, req.Params.Position.Character)
+				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+				op, ok := logic.SourceOperationAtForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
 				if ok {
 					info, ok := logic.ToolOpcodeForTools(op.Name, len(op.Args), res.Mode)
 					if ok {
-						_, idx, _ := res.ArgAt(req.Params.Position.Line, req.Params.Position.Character)
+						_, idx, _ := logic.SourceToolArgAtForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
 
 						active := new(int)
 						*active = idx
@@ -2011,9 +2017,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 								Command: "teal.call.remove",
 								Arguments: []interface{}{
 									tealRemoveCallCommandArgs{
-										Uri:     req.Params.TextDocument.Uri,
-										Line:    red.Line(),
-										Subline: red.Subline(),
+										Uri:       req.Params.TextDocument.Uri,
+										Line:      red.Line(),
+										Statement: red.Statement(),
 									},
 								},
 							},
@@ -2043,12 +2049,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					})
 				}
 
-				hs := res.InlayHints(req.Params.Range)
+				hs := logic.SourceInlayHintsForTools(res.SourceLines, res.SourceProgram)
 
-				for _, named := range hs.Named {
+				for _, named := range hs {
+					if named.Kind != logic.SourceInlayHintNamed {
+						continue
+					}
+					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, named.Token)
+					if !ok || !Overlaps(req.Params.Range, tok) {
+						continue
+					}
 					kind := "quickfix"
 					cas = append(cas, lspCodeAction{
-						Title: fmt.Sprintf("Replace with '%s'", named.Name),
+						Title: fmt.Sprintf("Replace with '%s'", named.Label),
 						Kind:  &kind,
 						Command: &LspCommand{
 							Title:   "Replace with named const",
@@ -2058,25 +2071,32 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 									Uri: req.Params.TextDocument.Uri,
 									Range: LspRange{
 										Start: LspPosition{
-											Line:      named.T.Line(),
-											Character: named.T.Begin(),
+											Line:      tok.Line(),
+											Character: tok.Begin(),
 										},
 										End: LspPosition{
-											Line:      named.T.Line(),
-											Character: named.T.End(),
+											Line:      tok.Line(),
+											Character: tok.End(),
 										},
 									},
-									Value: named.Name,
+									Value: named.Label,
 								},
 							},
 						},
 					})
 				}
 
-				for _, named := range hs.Decoded {
+				for _, named := range hs {
+					if named.Kind != logic.SourceInlayHintDecoded {
+						continue
+					}
+					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, named.Token)
+					if !ok || !Overlaps(req.Params.Range, tok) {
+						continue
+					}
 					kind := "quickfix"
 					cas = append(cas, lspCodeAction{
-						Title: fmt.Sprintf("Replace with literal '%s'", named.Value),
+						Title: fmt.Sprintf("Replace with literal '%s'", named.Label),
 						Kind:  &kind,
 						Command: &LspCommand{
 							Title:   "Replace with literal",
@@ -2086,15 +2106,15 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 									Uri: req.Params.TextDocument.Uri,
 									Range: LspRange{
 										Start: LspPosition{
-											Line:      named.T.Line(),
-											Character: named.T.Begin(),
+											Line:      tok.Line(),
+											Character: tok.Begin(),
 										},
 										End: LspPosition{
-											Line:      named.T.Line(),
-											Character: named.T.End(),
+											Line:      tok.Line(),
+											Character: tok.End(),
 										},
 									},
-									Value: fmt.Sprintf("\"%s\"", strings.ReplaceAll(named.Value, "\"", "\\\"")),
+									Value: fmt.Sprintf("\"%s\"", strings.ReplaceAll(named.Label, "\"", "\\\"")),
 								},
 							},
 						},
@@ -2103,8 +2123,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				{
 					kind := "quickfix"
-					for _, v := range res.Versions {
-						if Overlaps(req.Params.Range, v) {
+					for _, v := range res.SourceProgram.RequiredVersions {
+						rg, ok := tokenFromSourceRequiredVersion(res.SourceLines, v)
+						if ok && Overlaps(req.Params.Range, rg) {
 							cas = append(cas, lspCodeAction{
 								Title: fmt.Sprintf("Update version to %d", v.Version),
 								Kind:  &kind,
@@ -2224,36 +2245,35 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			st := SemanticTokens{}
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, v := range res.Bools {
-					st = append(st, prepareValueSemToken(v))
-				}
-
-				for _, m := range res.Macros {
-					st = append(st, prepareMacroSemToken(m))
-				}
-
-				for _, op := range res.Ops {
-					if op.Type() == TokenValue {
-						st = append(st, prepareOpSemToken(op))
+				for _, class := range res.SourceProgram.TokenClasses {
+					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, class.Token)
+					if !ok {
+						continue
+					}
+					switch class.Kind {
+					case logic.SourceTokenClassOpcode:
+						st = append(st, prepareOpSemToken(tok))
+					case logic.SourceTokenClassMacro:
+						st = append(st, prepareMacroSemToken(tok))
+					case logic.SourceTokenClassBool:
+						st = append(st, prepareValueSemToken(tok))
+					case logic.SourceTokenClassNumber:
+						st = append(st, prepareNumberSemToken(tok))
+					case logic.SourceTokenClassString:
+						st = append(st, prepareStringSemToken(tok))
+					case logic.SourceTokenClassKeyword:
+						st = append(st, prepareKeywordSemToken(tok))
+					default:
 					}
 				}
 
-				for _, v := range res.Numbers {
-					st = append(st, prepareNumberSemToken(v))
-				}
-
-				for _, v := range res.Strings {
-					st = append(st, prepareStringSemToken(v))
-				}
-
-				for _, v := range res.Keywords {
-					st = append(st, prepareKeywordSemToken(v))
-				}
-
-				for _, t := range res.Tokens {
-					switch t.Type() {
-					case TokenComment:
-						st = append(st, prepareCommentSemToken(t))
+				for _, line := range res.SourceLines {
+					if line.Comment == nil {
+						continue
+					}
+					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, *line.Comment)
+					if ok {
+						st = append(st, prepareCommentSemToken(tok))
 					}
 				}
 
@@ -2687,9 +2707,16 @@ func prepareRemoveLineEdit(line int) lspTextEdit {
 	}
 }
 
-func prepareRemoveSublineEdit(res *ProcessResult, line int, subline int) lspTextEdit {
-	b := res.Lines[line].SublineBegin(subline)
-	e := res.Lines[line].SublineEnd(subline)
+func prepareRemoveStatementEdit(res *ProcessResult, line int, statement int) lspTextEdit {
+	b := 0
+	e := 0
+	if line >= 0 && line < len(res.SourceLines) {
+		statements := res.SourceLines[line].Statements
+		if statement >= 0 && statement < len(statements) {
+			b = utf16ColumnFromByte(res.SourceLines[line].Text, statements[statement].Column)
+			e = utf16ColumnFromByte(res.SourceLines[line].Text, statements[statement].EndColumn)
+		}
+	}
 
 	return lspTextEdit{
 		Range: LspRange{
