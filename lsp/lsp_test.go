@@ -221,6 +221,23 @@ func TestSourceNavigationHelpers(t *testing.T) {
 	}}, sourceDocumentSymbols(result))
 }
 
+func TestSourceDocumentSymbolsSkipEmptyNames(t *testing.T) {
+	result := logic.SourceAnalysisResult{
+		Index: logic.SourceIndex{
+			Symbols: []logic.SourceSymbol{
+				{Name: "", Kind: logic.SourceSymbolLabel},
+				{Name: "valid", Kind: logic.SourceSymbolLabel, EndColumn: len("valid:")},
+			},
+		},
+	}
+
+	assert.Equal(t, []sourceDocumentSymbol{{
+		Name:           "valid",
+		Range:          logic.SourceRange{Line: 0, EndLine: 0, EndColumn: len("valid:")},
+		SelectionRange: logic.SourceRange{Line: 0, EndLine: 0, EndColumn: len("valid")},
+	}}, sourceDocumentSymbols(result))
+}
+
 func TestSourceCodeLenses(t *testing.T) {
 	result := logic.AnalyzeSourceForToolsWithOptions("b a\na:\nunused:", logic.SourceToolOptions{Mode: logic.ModeApp})
 	lenses := sourceCodeLenses(result)

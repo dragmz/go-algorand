@@ -1,0 +1,618 @@
+package lsp
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/textproto"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/algorand/go-algorand/data/transactions/logic"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const protocolTestURI = "file:///test.teal"
+
+const protocolTestSource = `#pragma version 8
+#define VALUE 1
+start:
+  txn Sender
+  byte 0x3031
+  b start
+unused:
+  int VALUE
+
+`
+
+type protocolMessage struct {
+	JsonRpc string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *lspError       `json:"error,omitempty"`
+}
+
+func TestProtocolInitializeLifecycleAndDocumentCache(t *testing.T) {
+	frames := runProtocol(t,
+		protocolRequest("init", "initialize", initializeParams(map[string]any{
+			"semanticTokens": false,
+			"inlayNamed":     false,
+			"inlayDecoded":   false,
+			"programSize":    false,
+		})),
+		protocolNotification("initialized", map[string]any{}),
+		didOpenNotification(protocolTestURI, "int 1"),
+		protocolRequest("diag-ok", "textDocument/diagnostic", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		didChangeNotification(protocolTestURI, "unknown"),
+		protocolRequest("diag-err", "textDocument/diagnostic", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolNotification("textDocument/didSave", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolNotification("textDocument/didClose", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("diag-closed", "textDocument/diagnostic", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("shutdown", "shutdown", nil),
+		protocolNotification("exit", nil),
+	)
+
+	init := protocolResultAs[lspInitializeResult](t, protocolResponseByID(t, frames, "init"))
+	require.NotNil(t, init.Capabilities)
+	require.Nil(t, init.Capabilities.SemanticTokensProvider)
+	require.NotNil(t, init.Capabilities.InlayHintProvider)
+	assert.False(t, *init.Capabilities.InlayHintProvider)
+
+	okDiagnostics := protocolResultAs[lspFullDocumentDiagnosticReport](t, protocolResponseByID(t, frames, "diag-ok"))
+	assert.Empty(t, okDiagnostics.Items)
+
+	errDiagnostics := protocolResultAs[lspFullDocumentDiagnosticReport](t, protocolResponseByID(t, frames, "diag-err"))
+	require.NotEmpty(t, errDiagnostics.Items)
+	assert.Contains(t, errDiagnostics.Items[0].Message, "unknown opcode")
+
+	closedDiagnostics := protocolResultAs[lspFullDocumentDiagnosticReport](t, protocolResponseByID(t, frames, "diag-closed"))
+	assert.Empty(t, closedDiagnostics.Items)
+	protocolAssertSuccess(t, protocolResponseByID(t, frames, "shutdown"))
+}
+
+func TestProtocolTextDocumentOperations(t *testing.T) {
+	frames := runProtocol(t,
+		protocolRequest("init", "initialize", initializeParams(map[string]any{
+			"semanticTokens": true,
+			"inlayNamed":     true,
+			"inlayDecoded":   true,
+			"lensRefs":       true,
+			"pcLens":         true,
+			"pcInlay":        true,
+			"programSize":    true,
+		})),
+		didOpenNotification(protocolTestURI, protocolTestSource),
+		protocolRequest("diagnostic", "textDocument/diagnostic", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("completion-op", "textDocument/completion", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 8, "character": 0},
+		}),
+		protocolRequest("completion-arg", "textDocument/completion", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 3, "character": len("  txn ")},
+		}),
+		protocolRequest("hover", "textDocument/hover", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 3, "character": len("  tx")},
+		}),
+		protocolRequest("signature", "textDocument/signatureHelp", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 3, "character": len("  txn ")},
+		}),
+		protocolRequest("definition", "textDocument/definition", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 5, "character": len("  b ")},
+		}),
+		protocolRequest("prepare-rename", "textDocument/prepareRename", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 2, "character": 0},
+		}),
+		protocolRequest("rename", "textDocument/rename", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 2, "character": 0},
+			"newName":      "entry",
+		}),
+		protocolRequest("highlight", "textDocument/documentHighlight", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 2, "character": 0},
+		}),
+		protocolRequest("symbols", "textDocument/documentSymbol", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("tokens", "textDocument/semanticTokens/full", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("actions", "textDocument/codeAction", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"range":        protocolRange(6, 0, 6, len("unused:")),
+			"context":      map[string]any{"diagnostics": []any{}},
+		}),
+		protocolRequest("lenses", "textDocument/codeLens", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("inlays", "textDocument/inlayHint", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"range":        protocolRange(0, 0, 99, 0),
+		}),
+		protocolRequest("shutdown", "shutdown", nil),
+		protocolNotification("exit", nil),
+	)
+
+	protocolAssertNoResponseErrors(t, frames)
+	init := protocolResultAs[lspInitializeResult](t, protocolResponseByID(t, frames, "init"))
+	require.NotNil(t, init.Capabilities.SemanticTokensProvider)
+	require.NotNil(t, init.Capabilities.InlayHintProvider)
+	assert.True(t, *init.Capabilities.InlayHintProvider)
+
+	diagnostics := protocolResultAs[lspFullDocumentDiagnosticReport](t, protocolResponseByID(t, frames, "diagnostic"))
+	assert.Equal(t, "full", diagnostics.Kind)
+	require.Len(t, diagnostics.Items, 1)
+	assert.Contains(t, diagnostics.Items[0].Message, "Program size:")
+
+	opCompletions := protocolResultAs[[]lspCompletionItem](t, protocolResponseByID(t, frames, "completion-op"))
+	opLabels := protocolCompletionLabels(opCompletions)
+	assert.Contains(t, opLabels, "soc")
+	assert.Contains(t, opLabels, "func")
+	assert.Contains(t, opLabels, "txn")
+
+	argCompletions := protocolResultAs[[]lspCompletionItem](t, protocolResponseByID(t, frames, "completion-arg"))
+	assert.Contains(t, protocolCompletionLabels(argCompletions), "Sender")
+
+	hover := protocolResultAs[lspHover](t, protocolResponseByID(t, frames, "hover"))
+	assert.NotEmpty(t, hover.Contents.Value)
+
+	signature := protocolResultAs[lspSignatureHelp](t, protocolResponseByID(t, frames, "signature"))
+	require.NotEmpty(t, signature.Signatures)
+	assert.Contains(t, signature.Signatures[0].Label, "txn")
+
+	definitions := protocolResultAs[[]lspLocation](t, protocolResponseByID(t, frames, "definition"))
+	require.Len(t, definitions, 1)
+	assert.Equal(t, protocolTestURI, definitions[0].Uri)
+
+	prepareRename := protocolResultAs[lspPrepareRenameResponse](t, protocolResponseByID(t, frames, "prepare-rename"))
+	assert.Equal(t, "start", prepareRename.Placeholder)
+
+	rename := protocolResultAs[lspWorkspaceEdit](t, protocolResponseByID(t, frames, "rename"))
+	require.Len(t, rename.Changes[protocolTestURI], 2)
+
+	highlights := protocolResultAs[[]lspDocumentHighlight](t, protocolResponseByID(t, frames, "highlight"))
+	require.Len(t, highlights, 2)
+
+	symbols := protocolResultAs[[]LspDocumentSymbol](t, protocolResponseByID(t, frames, "symbols"))
+	require.NotEmpty(t, symbols)
+	for _, symbol := range symbols {
+		assert.NotEmpty(t, symbol.Name)
+	}
+
+	tokens := protocolResultAs[lspSemanticTokens](t, protocolResponseByID(t, frames, "tokens"))
+	require.NotEmpty(t, tokens.Data)
+	assert.Zero(t, len(tokens.Data)%5)
+
+	actions := protocolResultAs[[]lspCodeAction](t, protocolResponseByID(t, frames, "actions"))
+	require.NotEmpty(t, actions)
+	assert.Contains(t, protocolCodeActionTitles(actions), "Remove label 'unused'")
+
+	lenses := protocolResultAs[[]LspCodeLens](t, protocolResponseByID(t, frames, "lenses"))
+	require.NotEmpty(t, lenses)
+	assert.True(t, protocolCodeLensTitleContains(lenses, "refs:"))
+	assert.True(t, protocolCodeLensTitleContains(lenses, "pc:"))
+
+	inlays := protocolResultAs[[]LspInlayHint](t, protocolResponseByID(t, frames, "inlays"))
+	require.NotEmpty(t, inlays)
+	assert.Contains(t, protocolInlayLabels(inlays), "01")
+	assert.True(t, protocolInlayLabelHasPrefix(inlays, "pc:"))
+}
+
+func TestProtocolDocumentSymbolsRejectEmptyNames(t *testing.T) {
+	frames := runProtocol(t,
+		protocolRequest("init", "initialize", initializeParams(nil)),
+		didOpenNotification(protocolTestURI, ":"),
+		protocolRequest("symbols", "textDocument/documentSymbol", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("shutdown", "shutdown", nil),
+		protocolNotification("exit", nil),
+	)
+
+	symbols := protocolResultAs[[]LspDocumentSymbol](t, protocolResponseByID(t, frames, "symbols"))
+	assert.Empty(t, symbols)
+}
+
+func TestProtocolWorkspaceCommands(t *testing.T) {
+	ops, err := logic.AssembleString("#pragma version 8\nint 1")
+	require.NoError(t, err)
+
+	frames := runProtocol(t,
+		protocolRequest("init", "initialize", initializeParams(map[string]any{"programSize": false})),
+		didOpenNotification(protocolTestURI, protocolTestSource),
+		protocolRequest("sourcemap", "workspace/executeCommand", map[string]any{
+			"command":   "teal.sourcemap.generate",
+			"arguments": map[string]any{"uri": protocolTestURI},
+		}),
+		protocolRequest("decompile", "workspace/executeCommand", map[string]any{
+			"command":   "teal.decompile",
+			"arguments": map[string]any{"bytecode": base64.StdEncoding.EncodeToString(ops.Program)},
+		}),
+		protocolRequest("pc", "workspace/executeCommand", map[string]any{
+			"command":   "teal.pc.resolve",
+			"arguments": map[string]any{"uri": protocolTestURI, "pc": 1},
+		}),
+		protocolRequest("version", "workspace/executeCommand", map[string]any{
+			"command":   "teal.version.update",
+			"arguments": []any{map[string]any{"uri": protocolTestURI, "version": 9}},
+		}),
+		protocolRequest("replace", "workspace/executeCommand", map[string]any{
+			"command": "teal.value.replace",
+			"arguments": []any{map[string]any{
+				"uri":   protocolTestURI,
+				"range": protocolRange(7, len("  int "), 7, len("  int VALUE")),
+				"name":  "1",
+			}},
+		}),
+		protocolRequest("call-remove", "workspace/executeCommand", map[string]any{
+			"command":   "teal.call.remove",
+			"arguments": []any{map[string]any{"uri": protocolTestURI, "line": 5, "statement": 0}},
+		}),
+		protocolRequest("label-remove", "workspace/executeCommand", map[string]any{
+			"command":   "teal.label.remove",
+			"arguments": []any{map[string]any{"uri": protocolTestURI, "name": "unused"}},
+		}),
+		protocolRequest("label-create", "workspace/executeCommand", map[string]any{
+			"command":   "teal.label.create",
+			"arguments": []any{map[string]any{"uri": protocolTestURI, "name": "created"}},
+		}),
+		protocolRequest("shutdown", "shutdown", nil),
+		protocolNotification("exit", nil),
+	)
+
+	protocolAssertNoResponseErrors(t, frames)
+
+	sourceMap := protocolResultAs[tealGenerateSourcemapCommandResult](t, protocolResponseByID(t, frames, "sourcemap"))
+	assert.NotEmpty(t, sourceMap.SourceMap.Mappings)
+
+	decompiled := protocolResultAs[tealDecompileCommandResult](t, protocolResponseByID(t, frames, "decompile"))
+	assert.NotEmpty(t, decompiled.Teal)
+
+	pc := protocolResultAs[LspPosition](t, protocolResponseByID(t, frames, "pc"))
+	assert.Equal(t, 3, pc.Line)
+
+	for _, id := range []string{"version", "replace", "call-remove", "label-remove", "label-create"} {
+		protocolAssertSuccess(t, protocolResponseByID(t, frames, id))
+	}
+
+	applyEdits := protocolRequestsByMethod(frames, "workspace/applyEdit")
+	require.Len(t, applyEdits, 5)
+	for _, req := range applyEdits {
+		var params lspWorkspaceApplyEditRequestParams
+		require.NoError(t, json.Unmarshal(req.Params, &params))
+		require.NotEmpty(t, params.Edit.DocumentChanges)
+	}
+}
+
+func TestProtocolWorkspaceCommandErrors(t *testing.T) {
+	frames := runProtocol(t,
+		protocolRequest("init", "initialize", initializeParams(nil)),
+		protocolRequest("unknown-command", "workspace/executeCommand", map[string]any{
+			"command":   "teal.unknown",
+			"arguments": []any{},
+		}),
+		protocolRequest("bad-params", "workspace/executeCommand", map[string]any{
+			"command":   "teal.label.create",
+			"arguments": []any{},
+		}),
+		protocolRequest("shutdown", "shutdown", nil),
+		protocolNotification("exit", nil),
+	)
+
+	unknown := protocolResponseByID(t, frames, "unknown-command")
+	require.NotNil(t, unknown.Error)
+	assert.Equal(t, ErrorCodeMethodNotFound, unknown.Error.Code)
+
+	badParams := protocolResponseByID(t, frames, "bad-params")
+	require.NotNil(t, badParams.Error)
+	assert.Equal(t, ErrorCodeInvalidParams, badParams.Error.Code)
+}
+
+func TestProtocolExamplesSmoke(t *testing.T) {
+	root := "examples"
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		require.NoError(t, err)
+		if d.IsDir() || filepath.Ext(path) != ".teal" {
+			return nil
+		}
+
+		t.Run(filepath.ToSlash(path), func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			require.NoError(t, err)
+			uri := "file:///" + filepath.ToSlash(path)
+			frames := runProtocol(t,
+				protocolRequest("init", "initialize", initializeParams(map[string]any{
+					"semanticTokens": true,
+					"inlayNamed":     true,
+					"inlayDecoded":   true,
+					"programSize":    true,
+				})),
+				didOpenNotification(uri, string(source)),
+				protocolRequest("diagnostic", "textDocument/diagnostic", map[string]any{
+					"textDocument": map[string]any{"uri": uri},
+				}),
+				protocolRequest("symbols", "textDocument/documentSymbol", map[string]any{
+					"textDocument": map[string]any{"uri": uri},
+				}),
+				protocolRequest("tokens", "textDocument/semanticTokens/full", map[string]any{
+					"textDocument": map[string]any{"uri": uri},
+				}),
+				protocolRequest("completion", "textDocument/completion", map[string]any{
+					"textDocument": map[string]any{"uri": uri},
+					"position":     map[string]any{"line": 0, "character": 0},
+				}),
+				protocolRequest("actions", "textDocument/codeAction", map[string]any{
+					"textDocument": map[string]any{"uri": uri},
+					"range":        protocolRange(0, 0, 0, 0),
+					"context":      map[string]any{"diagnostics": []any{}},
+				}),
+				protocolRequest("shutdown", "shutdown", nil),
+				protocolNotification("exit", nil),
+			)
+
+			protocolAssertNoResponseErrors(t, frames)
+			diagnostics := protocolResultAs[lspFullDocumentDiagnosticReport](t, protocolResponseByID(t, frames, "diagnostic"))
+			for _, diagnostic := range diagnostics.Items {
+				assert.NotEmpty(t, diagnostic.Message)
+			}
+			symbols := protocolResultAs[[]LspDocumentSymbol](t, protocolResponseByID(t, frames, "symbols"))
+			for _, symbol := range symbols {
+				assert.NotEmpty(t, symbol.Name)
+			}
+			protocolResultAs[lspSemanticTokens](t, protocolResponseByID(t, frames, "tokens"))
+			protocolResultAs[[]lspCompletionItem](t, protocolResponseByID(t, frames, "completion"))
+			protocolResultAs[[]lspCodeAction](t, protocolResponseByID(t, frames, "actions"))
+		})
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func runProtocol(t *testing.T, messages ...map[string]any) []protocolMessage {
+	t.Helper()
+
+	var input bytes.Buffer
+	for _, msg := range messages {
+		input.Write(protocolFrame(t, msg))
+	}
+
+	var output bytes.Buffer
+	server, err := New(&input, &output)
+	require.NoError(t, err)
+
+	code, err := server.Run()
+	require.NoError(t, err)
+	require.Zero(t, code)
+
+	return protocolReadFrames(t, output.Bytes())
+}
+
+func protocolFrame(t *testing.T, msg map[string]any) []byte {
+	t.Helper()
+
+	body, err := json.Marshal(msg)
+	require.NoError(t, err)
+
+	return []byte(fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(body), body))
+}
+
+func protocolReadFrames(t *testing.T, data []byte) []protocolMessage {
+	t.Helper()
+
+	reader := textproto.NewReader(bufio.NewReader(bytes.NewReader(data)))
+	var messages []protocolMessage
+	for {
+		header, err := reader.ReadMIMEHeader()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+		}
+
+		length, err := strconv.Atoi(header.Get("Content-Length"))
+		require.NoError(t, err)
+
+		body := make([]byte, length)
+		_, err = io.ReadFull(reader.R, body)
+		require.NoError(t, err)
+
+		var msg protocolMessage
+		require.NoError(t, json.Unmarshal(body, &msg), string(body))
+		require.Equal(t, "2.0", msg.JsonRpc, string(body))
+		messages = append(messages, msg)
+	}
+	return messages
+}
+
+func protocolRequest(id string, method string, params any) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  method,
+		"params":  params,
+	}
+}
+
+func protocolNotification(method string, params any) map[string]any {
+	msg := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+	}
+	if params != nil {
+		msg["params"] = params
+	}
+	return msg
+}
+
+func didOpenNotification(uri string, source string) map[string]any {
+	return protocolNotification("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{
+			"uri":     uri,
+			"version": 1,
+			"text":    source,
+		},
+	})
+}
+
+func didChangeNotification(uri string, source string) map[string]any {
+	return protocolNotification("textDocument/didChange", map[string]any{
+		"textDocument": map[string]any{
+			"uri":     uri,
+			"version": 2,
+		},
+		"contentChanges": []any{map[string]any{"text": source}},
+	})
+}
+
+func initializeParams(options map[string]any) map[string]any {
+	params := map[string]any{
+		"processId": 1,
+		"clientInfo": map[string]any{
+			"name":    "protocol-test",
+			"version": "1",
+		},
+		"capabilities": map[string]any{},
+	}
+	if options != nil {
+		params["initializationOptions"] = options
+	}
+	return params
+}
+
+func protocolRange(startLine int, startCharacter int, endLine int, endCharacter int) map[string]any {
+	return map[string]any{
+		"start": map[string]any{"line": startLine, "character": startCharacter},
+		"end":   map[string]any{"line": endLine, "character": endCharacter},
+	}
+}
+
+func protocolResponseByID(t *testing.T, messages []protocolMessage, id string) protocolMessage {
+	t.Helper()
+
+	for _, msg := range messages {
+		if msg.Method == "" && protocolMessageID(t, msg) == id {
+			return msg
+		}
+	}
+	require.Failf(t, "response not found", "id %q not found in %d messages", id, len(messages))
+	return protocolMessage{}
+}
+
+func protocolRequestsByMethod(messages []protocolMessage, method string) []protocolMessage {
+	var requests []protocolMessage
+	for _, msg := range messages {
+		if msg.Method == method {
+			requests = append(requests, msg)
+		}
+	}
+	return requests
+}
+
+func protocolMessageID(t *testing.T, msg protocolMessage) string {
+	t.Helper()
+
+	var id string
+	require.NoError(t, json.Unmarshal(msg.ID, &id))
+	return id
+}
+
+func protocolResultAs[T any](t *testing.T, msg protocolMessage) T {
+	t.Helper()
+
+	require.Nil(t, msg.Error)
+	require.NotEmpty(t, msg.Result, "response %s has no result", protocolMessageID(t, msg))
+
+	var result T
+	require.NoError(t, json.Unmarshal(msg.Result, &result), string(msg.Result))
+	return result
+}
+
+func protocolAssertSuccess(t *testing.T, msg protocolMessage) {
+	t.Helper()
+
+	require.Nil(t, msg.Error)
+	assert.NotEmpty(t, msg.ID)
+}
+
+func protocolAssertNoResponseErrors(t *testing.T, messages []protocolMessage) {
+	t.Helper()
+
+	for _, msg := range messages {
+		if msg.Method == "" {
+			require.Nil(t, msg.Error, "response %s failed: %+v", protocolMessageID(t, msg), msg.Error)
+		}
+	}
+}
+
+func protocolCompletionLabels(items []lspCompletionItem) map[string]bool {
+	labels := make(map[string]bool)
+	for _, item := range items {
+		labels[item.Label] = true
+	}
+	return labels
+}
+
+func protocolCodeActionTitles(actions []lspCodeAction) map[string]bool {
+	titles := make(map[string]bool)
+	for _, action := range actions {
+		titles[action.Title] = true
+	}
+	return titles
+}
+
+func protocolCodeLensTitleContains(lenses []LspCodeLens, text string) bool {
+	for _, lens := range lenses {
+		if lens.Command != nil && strings.Contains(lens.Command.Title, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func protocolInlayLabels(inlays []LspInlayHint) map[string]bool {
+	labels := make(map[string]bool)
+	for _, inlay := range inlays {
+		labels[inlay.Label] = true
+	}
+	return labels
+}
+
+func protocolInlayLabelHasPrefix(inlays []LspInlayHint, prefix string) bool {
+	for _, inlay := range inlays {
+		if strings.HasPrefix(inlay.Label, prefix) {
+			return true
+		}
+	}
+	return false
+}

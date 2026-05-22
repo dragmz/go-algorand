@@ -271,10 +271,13 @@ func sourceIndexStatement(statement SourceStatement, statementIndex int) sourceI
 	}
 
 	if strings.HasSuffix(tokens[0].Text, ":") {
-		label := tokens[0]
-		indexed.label = &label
-		indexed.labelName = strings.TrimSuffix(tokens[0].Text, ":")
-		tokens = tokens[1:]
+		labelName := strings.TrimSuffix(tokens[0].Text, ":")
+		if labelName != "" {
+			label := tokens[0]
+			indexed.label = &label
+			indexed.labelName = labelName
+			tokens = tokens[1:]
+		}
 	}
 
 	if len(tokens) > 0 {

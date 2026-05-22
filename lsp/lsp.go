@@ -1947,6 +1947,9 @@ func sourceHighlights(result logic.SourceAnalysisResult, line int, column int) [
 func sourceDocumentSymbols(result logic.SourceAnalysisResult) []sourceDocumentSymbol {
 	symbols := make([]sourceDocumentSymbol, 0, len(result.Index.Symbols))
 	for _, symbol := range result.Index.Symbols {
+		if symbol.Name == "" {
+			continue
+		}
 		symbols = append(symbols, sourceDocumentSymbol{
 			Name:           symbol.Name,
 			Range:          logic.SourceSymbolRangeForTools(symbol),

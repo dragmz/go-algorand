@@ -124,3 +124,10 @@ func TestSourceIndexByteColumns(t *testing.T) {
 	require.Equal(t, len("👍: b "), result.Index.References[0].Column)
 	require.Equal(t, len("👍: b 👍"), result.Index.References[0].EndColumn)
 }
+
+func TestSourceIndexIgnoresEmptyLabel(t *testing.T) {
+	result := AnalyzeSourceForTools(":")
+
+	require.Empty(t, result.Index.Symbols)
+	require.Empty(t, result.Index.References)
+}
