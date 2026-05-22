@@ -224,6 +224,51 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 	assert.True(t, protocolInlayLabelHasPrefix(inlays, "pc:"))
 }
 
+func TestProtocolCapabilitiesAdvertiseTestedOperations(t *testing.T) {
+	frames := runProtocol(t,
+		protocolRequest("init", "initialize", initializeParams(map[string]any{
+			"semanticTokens": true,
+			"inlayNamed":     true,
+			"inlayDecoded":   true,
+			"lensRefs":       true,
+			"pcLens":         true,
+			"pcInlay":        true,
+			"programSize":    true,
+		})),
+		protocolRequest("shutdown", "shutdown", nil),
+		protocolNotification("exit", nil),
+	)
+
+	init := protocolResultAs[lspInitializeResult](t, protocolResponseByID(t, frames, "init"))
+	require.NotNil(t, init.Capabilities)
+	assert.NotNil(t, init.Capabilities.DiagnosticProvider)
+	assert.NotNil(t, init.Capabilities.CompletionProvider)
+	assert.NotNil(t, init.Capabilities.DocumentSymbolProvider)
+	assert.True(t, *init.Capabilities.DocumentSymbolProvider)
+	assert.NotNil(t, init.Capabilities.CodeActionProvider)
+	assert.True(t, *init.Capabilities.CodeActionProvider)
+	assert.NotNil(t, init.Capabilities.RenameProvider)
+	assert.NotNil(t, init.Capabilities.RenameProvider.PrepareProvider)
+	assert.True(t, *init.Capabilities.RenameProvider.PrepareProvider)
+	assert.NotNil(t, init.Capabilities.DocumentHighlightProvider)
+	assert.True(t, *init.Capabilities.DocumentHighlightProvider)
+	assert.NotNil(t, init.Capabilities.SemanticTokensProvider)
+	assert.NotNil(t, init.Capabilities.DefinitionProvider)
+	assert.True(t, *init.Capabilities.DefinitionProvider)
+	assert.NotNil(t, init.Capabilities.HoverProvider)
+	assert.True(t, *init.Capabilities.HoverProvider)
+	assert.NotNil(t, init.Capabilities.SignatureHelpProvider)
+	assert.NotNil(t, init.Capabilities.InlayHintProvider)
+	assert.True(t, *init.Capabilities.InlayHintProvider)
+	assert.NotNil(t, init.Capabilities.CodeLensProvider)
+
+	require.NotNil(t, init.Capabilities.ExecuteCommandProvider)
+	advertised := protocolCommandSet(init.Capabilities.ExecuteCommandProvider.Commands)
+	for _, command := range protocolTestedWorkspaceCommands() {
+		assert.Contains(t, advertised, command)
+	}
+}
+
 func TestProtocolDocumentSymbolsRejectEmptyNames(t *testing.T) {
 	frames := runProtocol(t,
 		protocolRequest("init", "initialize", initializeParams(nil)),
@@ -615,4 +660,25 @@ func protocolInlayLabelHasPrefix(inlays []LspInlayHint, prefix string) bool {
 		}
 	}
 	return false
+}
+
+func protocolTestedWorkspaceCommands() []string {
+	return []string{
+		"teal.sourcemap.generate",
+		"teal.decompile",
+		"teal.pc.resolve",
+		"teal.version.update",
+		"teal.value.replace",
+		"teal.call.remove",
+		"teal.label.remove",
+		"teal.label.create",
+	}
+}
+
+func protocolCommandSet(commands []string) map[string]bool {
+	set := make(map[string]bool)
+	for _, command := range commands {
+		set[command] = true
+	}
+	return set
 }

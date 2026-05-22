@@ -1813,6 +1813,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					CodeActionProvider:        action,
 					ExecuteCommandProvider: &lspExecuteCommandProvider{
 						Commands: []string{
+							"teal.sourcemap.generate",
+							"teal.decompile",
 							"teal.label.create",
 							"teal.label.remove",
 							"teal.value.replace",
