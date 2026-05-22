@@ -39,13 +39,13 @@ func TestProcessEmpty(t *testing.T) {
 
 	assert.Equal(t, 0, len(res.SourceIndex.MissingReferences))
 	assert.Equal(t, 0, len(res.SourceIndex.Redundants))
-	assert.Equal(t, 0, len(res.RefCounts))
+	assert.Equal(t, 0, len(res.SourceIndex.RefCounts))
 	assert.Equal(t, 0, len(res.SourceLines))
 	assert.Equal(t, 0, len(res.SourceProgram.Operations))
 	assert.Equal(t, 0, len(res.SourceProgram.RequiredVersions))
 	assert.Equal(t, 0, len(res.SourceProgram.TokenClasses))
-	assert.Equal(t, 0, len(res.SymbolRefs))
-	assert.Equal(t, 0, len(res.Symbols))
+	assert.Equal(t, 0, len(res.SourceIndex.References))
+	assert.Equal(t, 0, len(res.SourceIndex.Symbols))
 }
 
 func TestRedundantLabelLine(t *testing.T) {
@@ -91,7 +91,7 @@ func TestIntArgVals(t *testing.T) {
 	}
 }
 
-func TestSymOrRefAt(t *testing.T) {
+func TestSourceIdentifierAt(t *testing.T) {
 	res := Process(`test_label:
 test_label2:
 b test_label
@@ -109,8 +109,11 @@ b test_label
 	}
 
 	for i, test := range tests {
-		name := res.SymOrRefAt(test.i)
-		assert.Equal(t, test.o, name, fmt.Sprintf("test #%d", i))
+		column := res.sourceColumn(test.i.StartLine(), test.i.StartCharacter())
+		identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, test.i.StartLine(), column)
+		if assert.True(t, ok, fmt.Sprintf("test #%d", i)) {
+			assert.Equal(t, test.o, identifier.Name, fmt.Sprintf("test #%d", i))
+		}
 	}
 }
 
@@ -182,7 +185,7 @@ func TestInlayHints(t *testing.T) {
 
 func TestRefCounts(t *testing.T) {
 	res := Process("b a\nb a\nb a\na:")
-	assert.Equal(t, 3, res.RefCounts["a"])
+	assert.Equal(t, 3, res.SourceIndex.RefCounts["a"])
 }
 
 func TestVersion(t *testing.T) {
@@ -352,13 +355,13 @@ func TestDefineRef(t *testing.T) {
 	#define VALUE 123
 	VALUE`)
 
-	assert.Len(t, res.Symbols, 1)
-	assert.Equal(t, "VALUE", res.Symbols[0].Name())
-	assert.Equal(t, 1, res.Symbols[0].Line())
+	assert.Len(t, res.SourceIndex.Symbols, 1)
+	assert.Equal(t, "VALUE", res.SourceIndex.Symbols[0].Name)
+	assert.Equal(t, 1, res.SourceIndex.Symbols[0].Line)
 
-	assert.Len(t, res.SymbolRefs, 1)
-	assert.Equal(t, "VALUE", res.SymbolRefs[0].String())
-	assert.Equal(t, 2, res.SymbolRefs[0].Line())
+	assert.Len(t, res.SourceIndex.References, 1)
+	assert.Equal(t, "VALUE", res.SourceIndex.References[0].Name)
+	assert.Equal(t, 2, res.SourceIndex.References[0].Line)
 }
 
 func TestDefineValueRef(t *testing.T) {
@@ -366,13 +369,13 @@ func TestDefineValueRef(t *testing.T) {
 	#define VALUE 123
 	int VALUE`)
 
-	assert.Len(t, res.Symbols, 1)
-	assert.Equal(t, "VALUE", res.Symbols[0].Name())
-	assert.Equal(t, 1, res.Symbols[0].Line())
+	assert.Len(t, res.SourceIndex.Symbols, 1)
+	assert.Equal(t, "VALUE", res.SourceIndex.Symbols[0].Name)
+	assert.Equal(t, 1, res.SourceIndex.Symbols[0].Line)
 
-	assert.Len(t, res.SymbolRefs, 1)
-	assert.Equal(t, "VALUE", res.SymbolRefs[0].String())
-	assert.Equal(t, 2, res.SymbolRefs[0].Line())
+	assert.Len(t, res.SourceIndex.References, 1)
+	assert.Equal(t, "VALUE", res.SourceIndex.References[0].Name)
+	assert.Equal(t, 2, res.SourceIndex.References[0].Line)
 }
 
 func TestStringDoesConflictWithDefine(t *testing.T) {
@@ -381,9 +384,10 @@ func TestStringDoesConflictWithDefine(t *testing.T) {
 	byte "VALUE"`)
 
 	assert.Len(t, sourceTokensByClass(res, logic.SourceTokenClassString), 1)
-	assert.Len(t, res.Symbols, 1)
-	assert.Empty(t, res.SymbolRefs)
+	assert.Len(t, res.SourceIndex.Symbols, 1)
+	assert.Empty(t, res.SourceIndex.References)
 }
+
 func TestEmojiLabelAndBranch(t *testing.T) {
 	emojiCases := []string{
 		"👍",
@@ -404,18 +408,18 @@ func TestEmojiLabelAndBranch(t *testing.T) {
 			res := Process(src)
 
 			// symbol detected
-			if !assert.Len(t, res.Symbols, 1) {
+			if !assert.Len(t, res.SourceIndex.Symbols, 1) {
 				return
 			}
-			sym := res.Symbols[0]
-			assert.Equal(t, name, sym.Name())
+			sym := res.SourceIndex.Symbols[0]
+			assert.Equal(t, name, sym.Name)
 
 			// branch reference detected
-			refs := res.SymRefByName(name)
+			refs := logic.SourceReferencesByNameForTools(res.SourceIndex, name)
 			if !assert.Len(t, refs, 1) {
 				return
 			}
-			assert.Equal(t, name, refs[0].String())
+			assert.Equal(t, name, refs[0].Name)
 
 			// string token captured separately
 			strings := sourceTokensByClass(res, logic.SourceTokenClassString)
@@ -424,9 +428,8 @@ func TestEmojiLabelAndBranch(t *testing.T) {
 			}
 			assert.Equal(t, "\""+name+"\"", strings[0].Text)
 
-			// positions: token end should be begin + name units + trailing ':'
-			nameUnits := utf16LenString(sym.Name())
-			assert.Equal(t, sym.Begin()+nameUnits+1, sym.End())
+			// positions: source index columns are byte offsets.
+			assert.Equal(t, len(name+":"), sym.EndColumn)
 		})
 	}
 }

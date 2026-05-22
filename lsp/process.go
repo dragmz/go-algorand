@@ -12,12 +12,6 @@ type ProcessResult struct {
 
 	Version uint64
 
-	Symbols    []Symbol
-	SymbolRefs []Token
-
-	RefCounts map[string]int
-	Defines   map[string]bool
-
 	SourceLines          []logic.SourceLine
 	SourceIndex          logic.SourceIndex
 	SourceProgram        logic.SourceProgram
@@ -30,95 +24,21 @@ func (r ProcessResult) AvailableOps() []logic.ToolOpcode {
 	return logic.ToolOpcodesForTools(r.Version, r.Mode)
 }
 
-func (r ProcessResult) SymbolsForRefWithin(rg Range) []Symbol {
-	var res []Symbol
-
-	refs := r.SymbolRefsWithin(rg)
-	if len(refs) == 0 {
-		return res
-	}
-
-	ref := refs[0]
-	for _, sym := range r.Symbols {
-		if sym.Name() == ref.String() {
-			res = append(res, sym)
-		}
-	}
-
-	return res
-}
-
-func (r ProcessResult) SymbolsWithin(rg Range) []Symbol {
-	var res []Symbol
-	for _, sym := range r.Symbols {
-		if Overlaps(rg, sym) {
-			res = append(res, sym)
-		}
-	}
-	return res
-}
-
-func (r ProcessResult) SymbolRefsWithin(rg Range) []Token {
-	var res []Token
-	for _, ref := range r.SymbolRefs {
-		if Overlaps(rg, ref) {
-			res = append(res, ref)
-		}
-	}
-	return res
-}
-
 func (r ProcessResult) ArgVals(arg logic.ToolArg) []logic.ToolArgValue {
 	if arg.Kind == logic.ToolArgLabel {
 		var res []logic.ToolArgValue
-		for _, sym := range r.Symbols {
+		for _, sym := range r.SourceIndex.Symbols {
 			res = append(res, logic.ToolArgValue{
 				NoValue:   true,
-				Name:      sym.Name(),
-				Docs:      sym.Docs(),
-				Signature: sym.Signature(),
+				Name:      sym.Name,
+				Docs:      sym.Docs,
+				Signature: sym.Signature,
 			})
 		}
 		return res
 	}
 
 	return logic.ToolArgValuesForTools(arg.Kind, arg.FieldGroup, r.Version, r.Mode)
-}
-
-func (r ProcessResult) SymByName(name string) []Symbol {
-	var res []Symbol
-	for _, sym := range r.Symbols {
-		if sym.Name() == name {
-			res = append(res, sym)
-		}
-	}
-	return res
-}
-
-func (r ProcessResult) SymRefByName(name string) []Token {
-	var res []Token
-	for _, sym := range r.SymbolRefs {
-		if sym.String() == name {
-			res = append(res, sym)
-		}
-	}
-	return res
-}
-
-func (r ProcessResult) SymOrRefAt(rg Range) string {
-	for _, sym := range r.Symbols {
-		if Overlaps(rg, sym) {
-			return sym.Name()
-		}
-	}
-
-	for _, ref := range r.SymbolRefs {
-		if Overlaps(rg, ref) {
-			return ref.String()
-		}
-	}
-
-	return ""
 }
 
 func (r ProcessResult) DocAt(l int, ch int) string {
@@ -243,10 +163,6 @@ func Process(source string) *ProcessResult {
 	return &ProcessResult{
 		Mode:                 mode,
 		Version:              analysis.Index.Version,
-		Symbols:              symbolsFromSourceIndex(analysis.Lines, analysis.Index),
-		SymbolRefs:           referencesFromSourceIndex(analysis.Lines, analysis.Index.References),
-		RefCounts:            analysis.Index.RefCounts,
-		Defines:              definesFromSourceIndex(analysis.Index),
 		SourceLines:          analysis.Lines,
 		SourceIndex:          analysis.Index,
 		SourceProgram:        analysis.Program,

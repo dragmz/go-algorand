@@ -1424,9 +1424,16 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 			}
 
-			symbols := res.SymbolsWithin(req.Params.Position)
-			if len(symbols) > 0 {
-				sym := symbols[0]
+			column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+			identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, req.Params.Position.Line, column)
+			if ok {
+				rg := LspRange{}
+				if identifier.Symbol != nil {
+					rg = sourceSymbolNameRangeToLSP(res.SourceLines, *identifier.Symbol)
+				}
+				if identifier.Reference != nil {
+					rg = sourceReferenceRangeToLSP(res.SourceLines, *identifier.Reference)
+				}
 
 				err = l.reportProgressEnd(req.Params.WorkDoneToken, "Symbol ready for rename")
 				if err != nil {
@@ -1434,35 +1441,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				}
 
 				return l.success(h.Id, lspPrepareRenameResponse{
-					Range: LspRange{
-						Start: LspPosition{
-							Line:      sym.Line(),
-							Character: sym.Begin(),
-						},
-						End: LspPosition{
-							Line:      sym.Line(),
-							Character: sym.Begin() + utf16LenString(sym.Name()),
-						},
-					},
-					Placeholder: sym.Name(),
-				})
-			}
-
-			references := res.SymbolRefsWithin(req.Params.Position)
-			if len(references) > 0 {
-				ref := references[0]
-				return l.success(h.Id, lspPrepareRenameResponse{
-					Range: LspRange{
-						Start: LspPosition{
-							Line:      ref.Line(),
-							Character: ref.Begin(),
-						},
-						End: LspPosition{
-							Line:      ref.Line(),
-							Character: ref.Begin() + utf16LenString(ref.String()),
-						},
-					},
-					Placeholder: ref.String(),
+					Range:       rg,
+					Placeholder: identifier.Name,
 				})
 			}
 
@@ -1498,12 +1478,10 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			chs := []lspTextEdit{}
 
-			for _, edited := range res.SymbolsWithin(req.Params.Position) {
-				chs = append(chs, sourceEditsToLSP(res.SourceLines, logic.SourceEditsRenameSymbolForTools(res.SourceIndex, edited.Name(), req.Params.NewName))...)
-			}
-
-			for _, edited := range res.SymbolRefsWithin(req.Params.Position) {
-				chs = append(chs, sourceEditsToLSP(res.SourceLines, logic.SourceEditsRenameSymbolForTools(res.SourceIndex, edited.String(), req.Params.NewName))...)
+			column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+			identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, req.Params.Position.Line, column)
+			if ok {
+				chs = append(chs, sourceEditsToLSP(res.SourceLines, logic.SourceEditsRenameSymbolForTools(res.SourceIndex, identifier.Name, req.Params.NewName))...)
 			}
 
 			message := fmt.Sprintf("Renamed %d locations", len(chs))
@@ -1546,16 +1524,16 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
 				if l.config.LensRefs {
-					for _, sym := range res.Symbols {
-						count := res.RefCounts[sym.Name()]
+					for _, sym := range res.SourceIndex.Symbols {
+						count := res.SourceIndex.RefCounts[sym.Name]
 						if count > 0 {
 							cls = append(cls, LspCodeLens{
 								Range: LspRange{
 									Start: LspPosition{
-										Line: sym.StartLine(),
+										Line: sym.Line,
 									},
 									End: LspPosition{
-										Line: sym.EndLine(),
+										Line: sym.Line,
 									},
 								},
 								Command: &LspCommand{
@@ -1767,7 +1745,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 						InsertTextFormat: snippetFormat,
 					})
 
-					for name := range res.Defines {
+					for _, name := range logic.SourceDefinedNamesForTools(res.SourceIndex) {
 						ccs = append(ccs, lspCompletionItem{
 							Label:      name,
 							Kind:       operator,
@@ -1865,19 +1843,15 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, sym := range res.SymbolsForRefWithin(req.Params.Position) {
+				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+				ref, ok := logic.SourceReferenceAtForTools(res.SourceIndex, req.Params.Position.Line, column)
+				if !ok {
+					return l.success(h.Id, ls)
+				}
+				for _, sym := range logic.SourceSymbolsByNameForTools(res.SourceIndex, ref.Name) {
 					ls = append(ls, lspLocation{
-						Uri: req.Params.TextDocument.Uri,
-						Range: LspRange{
-							Start: LspPosition{
-								Line:      sym.Line(),
-								Character: sym.Begin(),
-							},
-							End: LspPosition{
-								Line:      sym.Line(),
-								Character: sym.Begin() + utf16LenString(sym.Name()),
-							},
-						},
+						Uri:   req.Params.TextDocument.Uri,
+						Range: sourceSymbolNameRangeToLSP(res.SourceLines, sym),
 					})
 				}
 			}
@@ -2038,14 +2012,16 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				name := res.SymOrRefAt(req.Params.Position)
+				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+				identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, req.Params.Position.Line, column)
+				if ok {
+					for _, sym := range logic.SourceSymbolsByNameForTools(res.SourceIndex, identifier.Name) {
+						hs = append(hs, sourceSymbolHighlight(res.SourceLines, sym))
+					}
 
-				for _, sym := range res.SymByName(name) {
-					hs = append(hs, prepareSymbolHighlight(sym))
-				}
-
-				for _, ref := range res.SymRefByName(name) {
-					hs = append(hs, prepareSymbolRefHighlight(ref))
+					for _, ref := range logic.SourceReferencesByNameForTools(res.SourceIndex, identifier.Name) {
+						hs = append(hs, sourceReferenceHighlight(res.SourceLines, ref))
+					}
 				}
 			}
 
@@ -2062,8 +2038,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			syms := []LspDocumentSymbol{}
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, s := range res.Symbols {
-					syms = append(syms, prepareSymbol(s))
+				for _, s := range res.SourceIndex.Symbols {
+					syms = append(syms, sourceSymbolDocument(res.SourceLines, s))
 				}
 			}
 			return l.success(h.Id, syms)
@@ -2112,12 +2088,12 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					}
 				}
 
-				for _, s := range res.Symbols {
-					st = append(st, prepareSymbolSemToken(s))
+				for _, s := range res.SourceIndex.Symbols {
+					st = append(st, sourceSymbolSemToken(res.SourceLines, s))
 				}
 
-				for _, s := range res.SymbolRefs {
-					st = append(st, prepareSymbolRefSemToken(s))
+				for _, s := range res.SourceIndex.References {
+					st = append(st, sourceReferenceSemToken(res.SourceLines, s))
 				}
 			}
 
@@ -2352,21 +2328,48 @@ func utf16LenString(s string) int {
 	return cnt
 }
 
-func prepareSymbolRefSemToken(s Token) SemanticToken {
+func sourceRangeToLSP(lines []logic.SourceLine, rg logic.SourceRange) LspRange {
+	return LspRange{
+		Start: LspPosition{
+			Line:      rg.Line,
+			Character: sourceEditUTF16Column(lines, rg.Line, rg.Column),
+		},
+		End: LspPosition{
+			Line:      rg.EndLine,
+			Character: sourceEditUTF16Column(lines, rg.EndLine, rg.EndColumn),
+		},
+	}
+}
+
+func sourceSymbolNameRangeToLSP(lines []logic.SourceLine, symbol logic.SourceSymbol) LspRange {
+	return sourceRangeToLSP(lines, logic.SourceSymbolNameRangeForTools(symbol))
+}
+
+func sourceSymbolRangeToLSP(lines []logic.SourceLine, symbol logic.SourceSymbol) LspRange {
+	return sourceRangeToLSP(lines, logic.SourceSymbolRangeForTools(symbol))
+}
+
+func sourceReferenceRangeToLSP(lines []logic.SourceLine, ref logic.SourceReference) LspRange {
+	return sourceRangeToLSP(lines, logic.SourceReferenceRangeForTools(ref))
+}
+
+func sourceReferenceSemToken(lines []logic.SourceLine, ref logic.SourceReference) SemanticToken {
+	rg := sourceReferenceRangeToLSP(lines, ref)
 	return SemanticToken{
-		Line:      s.Line(),
-		Index:     s.Begin(),
-		Length:    s.End() - s.Begin(),
+		Line:      rg.Start.Line,
+		Index:     rg.Start.Character,
+		Length:    rg.End.Character - rg.Start.Character,
 		Type:      semanticTokenString,
 		Modifiers: 0,
 	}
 }
 
-func prepareSymbolSemToken(s Symbol) SemanticToken {
+func sourceSymbolSemToken(lines []logic.SourceLine, symbol logic.SourceSymbol) SemanticToken {
+	rg := sourceSymbolRangeToLSP(lines, symbol)
 	return SemanticToken{
-		Line:      s.Line(),
-		Index:     s.Begin(),
-		Length:    s.End() - s.Begin(),
+		Line:      rg.Start.Line,
+		Index:     rg.Start.Character,
+		Length:    rg.End.Character - rg.Start.Character,
 		Type:      semanticTokenMethod,
 		Modifiers: 0,
 	}
@@ -2442,59 +2445,29 @@ func prepareValueSemToken(v Token) SemanticToken {
 	}
 }
 
-func prepareSymbol(s Symbol) LspDocumentSymbol {
-	r := LspRange{
-		Start: LspPosition{
-			Line:      s.Line(),
-			Character: s.Begin(),
-		},
-		End: LspPosition{
-			Line:      s.Line(),
-			Character: s.End(),
-		},
-	}
-
-	ds := LspDocumentSymbol{
-		Name:           s.Name(),
+func sourceSymbolDocument(lines []logic.SourceLine, symbol logic.SourceSymbol) LspDocumentSymbol {
+	r := sourceSymbolRangeToLSP(lines, symbol)
+	return LspDocumentSymbol{
+		Name:           symbol.Name,
 		Kind:           LspSymbolKindMethod,
 		Range:          r,
-		SelectionRange: r,
+		SelectionRange: sourceSymbolNameRangeToLSP(lines, symbol),
 	}
-
-	return ds
 }
 
-func prepareSymbolRefHighlight(ref Token) lspDocumentHighlight {
+func sourceReferenceHighlight(lines []logic.SourceLine, ref logic.SourceReference) lspDocumentHighlight {
 	return lspDocumentHighlight{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      ref.Line(),
-				Character: ref.Begin(),
-			},
-			End: LspPosition{
-				Line:      ref.Line(),
-				Character: ref.End(),
-			},
-		},
-		Kind: &symbolHighlightKind,
+		Range: sourceReferenceRangeToLSP(lines, ref),
+		Kind:  &symbolHighlightKind,
 	}
 }
 
 var symbolHighlightKind = 1
 
-func prepareSymbolHighlight(sym Symbol) lspDocumentHighlight {
+func sourceSymbolHighlight(lines []logic.SourceLine, symbol logic.SourceSymbol) lspDocumentHighlight {
 	return lspDocumentHighlight{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      sym.Line(),
-				Character: sym.Begin(),
-			},
-			End: LspPosition{
-				Line:      sym.Line(),
-				Character: sym.Begin() + utf16LenString(sym.Name()),
-			},
-		},
-		Kind: &symbolHighlightKind,
+		Range: sourceSymbolNameRangeToLSP(lines, symbol),
+		Kind:  &symbolHighlightKind,
 	}
 }
 
