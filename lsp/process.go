@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"fmt"
 	"unicode/utf8"
 
 	"github.com/algorand/go-algorand/data/transactions/logic"
@@ -20,49 +19,16 @@ type ProcessResult struct {
 	AssembleError        error
 }
 
-func (r ProcessResult) AvailableOps() []logic.ToolOpcode {
-	return logic.ToolOpcodesForTools(r.Version, r.Mode)
-}
-
-func (r ProcessResult) ArgVals(arg logic.ToolArg) []logic.ToolArgValue {
-	if arg.Kind == logic.ToolArgLabel {
-		var res []logic.ToolArgValue
-		for _, sym := range r.SourceIndex.Symbols {
-			res = append(res, logic.ToolArgValue{
-				NoValue:   true,
-				Name:      sym.Name,
-				Docs:      sym.Docs,
-				Signature: sym.Signature,
-			})
-		}
-		return res
+func (r ProcessResult) sourceAnalysis() logic.SourceAnalysisResult {
+	return logic.SourceAnalysisResult{
+		Lines:       r.SourceLines,
+		Index:       r.SourceIndex,
+		Program:     r.SourceProgram,
+		Mode:        r.Mode,
+		OpStream:    r.OpStream,
+		Diagnostics: r.AssemblerDiagnostics,
+		Err:         r.AssembleError,
 	}
-
-	return logic.ToolArgValuesForTools(arg.Kind, arg.FieldGroup, r.Version, r.Mode)
-}
-
-func (r ProcessResult) DocAt(l int, ch int) string {
-	column := r.sourceColumn(l, ch)
-	op, ok := logic.SourceOperationAtForTools(r.SourceLines, r.SourceProgram, l, column)
-	if !ok {
-		return ""
-	}
-	if column >= op.Token.Column && column <= op.Token.EndColumn {
-		meta, ok := logic.ToolOpcodeForTools(op.Name, len(op.Args), r.Mode)
-		if ok {
-			return MakeFullDoc(meta.Docs, meta.ExtraDocs)
-		}
-	}
-	for _, arg := range op.Args {
-		if column >= arg.Token.Column && column <= arg.Token.EndColumn && arg.Docs != "" {
-			name := arg.ValueName
-			if name == "" {
-				name = arg.Token.Text
-			}
-			return fmt.Sprintf("%s = %d\r\n%s", name, arg.Value, arg.Docs)
-		}
-	}
-	return ""
 }
 
 func (r ProcessResult) sourceColumn(line int, character int) int {
@@ -143,16 +109,6 @@ func byteColumnFromUTF16Column(line string, character int) int {
 	return len(line)
 }
 
-func MakeFullDoc(short string, extra string) string {
-	if extra == "" {
-		return short
-	}
-	if short == "" {
-		return extra
-	}
-	return fmt.Sprintf("%s\r\n\r\n%s", short, extra)
-}
-
 func Process(source string) *ProcessResult {
 	initialLines := logic.SourceLinesForTools(source)
 	mode := sourceModeForLSP(initialLines)
@@ -161,7 +117,7 @@ func Process(source string) *ProcessResult {
 	})
 
 	return &ProcessResult{
-		Mode:                 mode,
+		Mode:                 analysis.Mode,
 		Version:              analysis.Index.Version,
 		SourceLines:          analysis.Lines,
 		SourceIndex:          analysis.Index,

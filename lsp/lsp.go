@@ -15,14 +15,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-type tealCompletionMode int
-
-const (
-	tealCompletionNone = tealCompletionMode(iota)
-	tealCompletionOp
-	tealCompletionArg
-)
-
 const (
 	semanticTokenKeyword  = 0
 	semanticTokenString   = 1
@@ -1662,138 +1654,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				var prefix string
-				mode := tealCompletionArg
 				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				ctx := logic.SourceCompletionContextForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
-				if ctx.Mode == logic.SourceCompletionOpcode {
-					mode = tealCompletionOp
-					prefix = ctx.Prefix
-				}
-
-				switch mode {
-				case tealCompletionArg:
-					arg, _, ok := logic.SourceToolArgAtForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
-					var values []logic.ToolArgValue
-					if ok {
-						values = res.ArgVals(arg)
-					}
-					for _, v := range values {
-						var d *lspCompletionItemLabelDetails
-						if !v.NoValue {
-							d = &lspCompletionItemLabelDetails{
-								Detail: fmt.Sprintf(" = %d", v.Value),
-							}
-						} else if v.Signature != "" {
-							d = &lspCompletionItemLabelDetails{
-								Detail: fmt.Sprintf(" %s", v.Signature),
-							}
-						}
-						ccs = append(ccs, lspCompletionItem{
-							LabelDetails: d,
-							Label:        v.Name,
-							Documentation: lspMarkupContent{
-								Kind:  "markdown",
-								Value: v.Docs,
-							},
-						})
-					}
-
-				case tealCompletionOp:
-					operator := new(int)
-					*operator = 25
-
-					snippet := 15
-
-					snippetFormat := new(int)
-					*snippetFormat = 2
-
-					var at string
-					var bt string
-					for i, name := range logic.OnCompletionNames {
-						if i > 0 {
-							at += " "
-						}
-
-						field := fmt.Sprintf("${%d:%s}", i+1, strings.ToLower(name))
-
-						at += field
-						bt += fmt.Sprintf("%s:\n", field)
-
-						if i < len(logic.OnCompletionNames)-1 {
-							bt += fmt.Sprintf("b ${%d:then}\n", len(logic.OnCompletionNames)+2)
-						}
-
-						bt += "\n"
-					}
-
-					bt += fmt.Sprintf("${%d:then}:\n$%d", len(logic.OnCompletionNames)+2, len(logic.OnCompletionNames)+3)
-
-					ccs = append(ccs, lspCompletionItem{
-						Label:            "soc",
-						Kind:             &snippet,
-						Detail:           "switch on OnCompletion",
-						InsertText:       fmt.Sprintf("txn OnCompletion\nswitch %s\n%s", at, bt),
-						InsertTextFormat: snippetFormat,
-					})
-
-					ccs = append(ccs, lspCompletionItem{
-						Label:            "func",
-						Kind:             &snippet,
-						Detail:           "create subroutine",
-						InsertText:       "${1:sub}:\r\n\r\n\tproto ${2:0} ${3:0}\r\n\t${4}\r\n\tretsub\r\n",
-						InsertTextFormat: snippetFormat,
-					})
-
-					for _, name := range logic.SourceDefinedNamesForTools(res.SourceIndex) {
-						ccs = append(ccs, lspCompletionItem{
-							Label:      name,
-							Kind:       operator,
-							InsertText: name,
-						})
-					}
-
-					for _, info := range res.AvailableOps() {
-						if !strings.HasPrefix(info.Name, prefix) {
-							continue
-						}
-
-						var insert string
-						var format *int
-						if len(info.Args) > 0 {
-							var placeholders string
-							for i, arg := range info.Args {
-								if i > 0 {
-									placeholders += " "
-								}
-
-								placeholders += fmt.Sprintf("${%d:%s}", i+1, arg.Name)
-							}
-
-							insert = fmt.Sprintf("%s %s", info.Name, placeholders)
-							format = snippetFormat
-						} else {
-							insert = ""
-							format = nil
-						}
-
-						ld := fmt.Sprintf("v%d", info.Version)
-						ccs = append(ccs, lspCompletionItem{
-							Label: info.Name,
-							Documentation: lspMarkupContent{
-								Kind:  "markdown",
-								Value: info.Docs,
-							},
-							Kind:             operator,
-							InsertText:       insert,
-							InsertTextFormat: format,
-							LabelDetails: &lspCompletionItemLabelDetails{
-								Description: ld,
-								Detail:      " " + info.ArgsSignature,
-							},
-						})
-					}
-				}
+				ccs = sourceCompletionsToLSP(logic.SourceCompletionsForTools(res.sourceAnalysis(), req.Params.Position.Line, column))
 			}
 
 			if len(ccs) == 0 {
@@ -1817,12 +1679,13 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				s := res.DocAt(req.Params.Position.Line, req.Params.Position.Character)
-				if s != "" {
+				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
+				hover, ok := logic.SourceHoverForTools(res.sourceAnalysis(), req.Params.Position.Line, column)
+				if ok {
 					c = lspHover{
 						Contents: lspMarkupContent{
 							Kind:  "plaintext",
-							Value: s,
+							Value: hover.Text,
 						},
 					}
 				}
@@ -1892,43 +1755,35 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
 				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				op, ok := logic.SourceOperationAtForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
+				help, ok := logic.SourceSignatureHelpForTools(res.sourceAnalysis(), req.Params.Position.Line, column)
 				if ok {
-					info, ok := logic.ToolOpcodeForTools(op.Name, len(op.Args), res.Mode)
-					if ok {
-						_, idx, _ := logic.SourceToolArgAtForTools(res.SourceLines, res.SourceProgram, req.Params.Position.Line, column)
+					active := new(int)
+					*active = help.ActiveParameter
 
-						active := new(int)
-						*active = idx
-
-						var doc interface{}
-						fullDoc := MakeFullDoc(info.Docs, info.ExtraDocs)
-
-						if fullDoc != "" {
-							doc = lspMarkupContent{
-								Kind:  "markdown",
-								Value: fullDoc,
-							}
+					var doc interface{}
+					if help.Docs != "" {
+						doc = lspMarkupContent{
+							Kind:  "markdown",
+							Value: help.Docs,
 						}
+					}
 
-						ps := []lspParameterInformation{}
+					ps := []lspParameterInformation{}
+					for _, parameter := range help.Parameters {
+						ps = append(ps, lspParameterInformation{
+							Label: parameter,
+						})
+					}
 
-						for _, arg := range info.Args {
-							ps = append(ps, lspParameterInformation{
-								Label: arg.Name,
-							})
-						}
-
-						sh = &lspSignatureHelp{
-							Signatures: []lspSignatureInformation{
-								{
-									Label:           info.FullSignature,
-									Documentation:   doc,
-									Parameters:      ps,
-									ActiveParameter: active,
-								},
+					sh = &lspSignatureHelp{
+						Signatures: []lspSignatureInformation{
+							{
+								Label:           help.Label,
+								Documentation:   doc,
+								Parameters:      ps,
+								ActiveParameter: active,
 							},
-						}
+						},
 					}
 				}
 			}
@@ -2251,6 +2106,125 @@ func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.Source
 		Kind:  &kind,
 		Edit:  &edit,
 	}
+}
+
+func sourceCompletionsToLSP(items []logic.SourceCompletionItem) []lspCompletionItem {
+	completions := make([]lspCompletionItem, 0, len(items))
+	for _, item := range items {
+		completions = append(completions, sourceCompletionToLSP(item))
+	}
+	return completions
+}
+
+func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
+	operator := new(int)
+	*operator = 25
+	snippet := 15
+	snippetFormat := new(int)
+	*snippetFormat = 2
+
+	switch item.Kind {
+	case logic.SourceCompletionItemSnippet:
+		return sourceSnippetCompletionToLSP(item, snippet, snippetFormat)
+	case logic.SourceCompletionItemDefine:
+		return lspCompletionItem{
+			Label:      item.Label,
+			Kind:       operator,
+			InsertText: item.Label,
+		}
+	case logic.SourceCompletionItemOpcode:
+		var insert string
+		var format *int
+		if len(item.Args) > 0 {
+			var placeholders string
+			for i, arg := range item.Args {
+				if i > 0 {
+					placeholders += " "
+				}
+				placeholders += fmt.Sprintf("${%d:%s}", i+1, arg.Name)
+			}
+			insert = fmt.Sprintf("%s %s", item.Label, placeholders)
+			format = snippetFormat
+		}
+		return lspCompletionItem{
+			Label: item.Label,
+			Documentation: lspMarkupContent{
+				Kind:  "markdown",
+				Value: item.Docs,
+			},
+			Kind:             operator,
+			InsertText:       insert,
+			InsertTextFormat: format,
+			LabelDetails: &lspCompletionItemLabelDetails{
+				Description: fmt.Sprintf("v%d", item.Version),
+				Detail:      " " + item.ArgsSignature,
+			},
+		}
+	default:
+		var details *lspCompletionItemLabelDetails
+		if item.HasValue {
+			details = &lspCompletionItemLabelDetails{
+				Detail: fmt.Sprintf(" = %d", item.Value),
+			}
+		} else if item.Signature != "" {
+			details = &lspCompletionItemLabelDetails{
+				Detail: fmt.Sprintf(" %s", item.Signature),
+			}
+		}
+		return lspCompletionItem{
+			LabelDetails: details,
+			Label:        item.Label,
+			Documentation: lspMarkupContent{
+				Kind:  "markdown",
+				Value: item.Docs,
+			},
+		}
+	}
+}
+
+func sourceSnippetCompletionToLSP(item logic.SourceCompletionItem, snippet int, snippetFormat *int) lspCompletionItem {
+	switch item.Snippet {
+	case logic.SourceCompletionSnippetOnCompletionSwitch:
+		return lspCompletionItem{
+			Label:            item.Label,
+			Kind:             &snippet,
+			Detail:           item.Detail,
+			InsertText:       sourceOnCompletionSwitchSnippet(),
+			InsertTextFormat: snippetFormat,
+		}
+	default:
+		return lspCompletionItem{
+			Label:            item.Label,
+			Kind:             &snippet,
+			Detail:           item.Detail,
+			InsertText:       "${1:sub}:\r\n\r\n\tproto ${2:0} ${3:0}\r\n\t${4}\r\n\tretsub\r\n",
+			InsertTextFormat: snippetFormat,
+		}
+	}
+}
+
+func sourceOnCompletionSwitchSnippet() string {
+	var at string
+	var bt string
+	for i, name := range logic.OnCompletionNames {
+		if i > 0 {
+			at += " "
+		}
+
+		field := fmt.Sprintf("${%d:%s}", i+1, strings.ToLower(name))
+
+		at += field
+		bt += fmt.Sprintf("%s:\n", field)
+
+		if i < len(logic.OnCompletionNames)-1 {
+			bt += fmt.Sprintf("b ${%d:then}\n", len(logic.OnCompletionNames)+2)
+		}
+
+		bt += "\n"
+	}
+
+	bt += fmt.Sprintf("${%d:then}:\n$%d", len(logic.OnCompletionNames)+2, len(logic.OnCompletionNames)+3)
+	return fmt.Sprintf("txn OnCompletion\nswitch %s\n%s", at, bt)
 }
 
 func workspaceEditFromSourceEdits(uri string, lines []logic.SourceLine, edits []logic.SourceEdit) lspWorkspaceEdit {

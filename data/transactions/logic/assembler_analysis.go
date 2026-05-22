@@ -41,6 +41,7 @@ type SourceAnalysisResult struct {
 	Lines       []SourceLine
 	Index       SourceIndex
 	Program     SourceProgram
+	Mode        RunMode
 	OpStream    *OpStream
 	Diagnostics []SourceDiagnostic
 	Err         error
@@ -66,6 +67,10 @@ func AnalyzeSourceForToolsWithOptions(source string, opts SourceToolOptions) Sou
 	if opts.UseVersion {
 		version = opts.Version
 	}
+	mode := opts.Mode
+	if mode == 0 {
+		mode = ModeApp
+	}
 	ops, err := AssembleStringWithVersion(source, version)
 	diagnostics := sourceDiagnosticsFromAssembly(lines, ops, err)
 	index := sourceIndexForTools(lines, ops)
@@ -74,6 +79,7 @@ func AnalyzeSourceForToolsWithOptions(source string, opts SourceToolOptions) Sou
 		Lines:       lines,
 		Index:       index,
 		Program:     sourceProgramForTools(lines, index, opts),
+		Mode:        mode,
 		OpStream:    ops,
 		Diagnostics: diagnostics,
 		Err:         err,

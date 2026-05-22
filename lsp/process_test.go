@@ -72,18 +72,14 @@ func TestRedundantBCallLine(t *testing.T) {
 	assert.Equal(t, "Remove b call", r.Message)
 }
 
-func TestIntArgVals(t *testing.T) {
+func TestIntArgCompletions(t *testing.T) {
 	res := Process("int ")
 
-	arg, _, ok := logic.SourceToolArgAtForTools(res.SourceLines, res.SourceProgram, 0, res.sourceColumn(0, 4))
-	if !assert.True(t, ok) {
-		return
-	}
-	vals := res.ArgVals(arg)
+	vals := logic.SourceCompletionsForTools(res.sourceAnalysis(), 0, res.sourceColumn(0, 4))
 
 	m := map[string]bool{}
 	for _, v := range vals {
-		m[v.Name] = true
+		m[v.Label] = true
 	}
 
 	if _, ok := m["DeleteApplication"]; !ok {
@@ -301,7 +297,7 @@ func getAvailableOps(source string) []string {
 
 	available := []string{}
 
-	for _, item := range res.AvailableOps() {
+	for _, item := range logic.ToolOpcodesForTools(res.Version, res.Mode) {
 		available = append(available, item.Name)
 	}
 
