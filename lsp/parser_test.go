@@ -2,13 +2,12 @@ package lsp
 
 import (
 	"testing"
+
+	"github.com/algorand/go-algorand/data/transactions/logic"
 )
 
 func TestDocs(t *testing.T) {
-	i, ok := Ops.Get(OpContext{
-		Name:    "txn",
-		Version: 9,
-	})
+	i, ok := logic.ToolOpcodeForTools("txn", 1, logic.ModeApp)
 
 	if !ok {
 		t.Error("txn not found")

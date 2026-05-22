@@ -1824,21 +1824,19 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 							format = nil
 						}
 
-						doc := logic.OpDoc(info.Name)
-
-						ld := fmt.Sprintf("v%d", info.AppVersion)
+						ld := fmt.Sprintf("v%d", info.Version)
 						ccs = append(ccs, lspCompletionItem{
 							Label: info.Name,
 							Documentation: lspMarkupContent{
 								Kind:  "markdown",
-								Value: doc,
+								Value: info.Docs,
 							},
 							Kind:             operator,
 							InsertText:       insert,
 							InsertTextFormat: format,
 							LabelDetails: &lspCompletionItemLabelDetails{
 								Description: ld,
-								Detail:      " " + info.ArgsSig,
+								Detail:      " " + info.ArgsSignature,
 							},
 						})
 					}
@@ -1866,7 +1864,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				s := res.DocAt(req.Params.Position.Line, req.Params.Position.Character, logic.OpDoc, logic.OpDocExtra)
+				s := res.DocAt(req.Params.Position.Line, req.Params.Position.Character)
 				if s != "" {
 					c = lspHover{
 						Contents: lspMarkupContent{
@@ -1944,49 +1942,43 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, op := range res.Ops {
-					if op.Line() == req.Params.Position.Line {
-						info, ok := Ops.Get(OpContext{
-							Name:    op.String(),
-							Version: res.Version,
-						})
-						if ok {
-							_, idx, _ := res.ArgAt(req.Params.Position.Line, req.Params.Position.Character)
+				op, ok := res.OperationAt(req.Params.Position.Line, req.Params.Position.Character)
+				if ok {
+					info, ok := logic.ToolOpcodeForTools(op.Name, len(op.Args), res.Mode)
+					if ok {
+						_, idx, _ := res.ArgAt(req.Params.Position.Line, req.Params.Position.Character)
 
-							active := new(int)
-							*active = idx
+						active := new(int)
+						*active = idx
 
-							var doc interface{}
+						var doc interface{}
+						fullDoc := MakeFullDoc(info.Docs, info.ExtraDocs)
 
-							fullDoc := MakeFullDoc(logic.OpDoc(info.Name), logic.OpDocExtra(info.Name))
-
-							if fullDoc != "" {
-								doc = lspMarkupContent{
-									Kind:  "markdown",
-									Value: fullDoc,
-								}
-							}
-
-							ps := []lspParameterInformation{}
-
-							for _, arg := range info.Args {
-								ps = append(ps, lspParameterInformation{
-									Label: arg.Name,
-								})
-							}
-
-							sh = &lspSignatureHelp{
-								Signatures: []lspSignatureInformation{
-									{
-										Label:           info.FullSig,
-										Documentation:   doc,
-										Parameters:      ps,
-										ActiveParameter: active,
-									},
-								},
+						if fullDoc != "" {
+							doc = lspMarkupContent{
+								Kind:  "markdown",
+								Value: fullDoc,
 							}
 						}
-						break
+
+						ps := []lspParameterInformation{}
+
+						for _, arg := range info.Args {
+							ps = append(ps, lspParameterInformation{
+								Label: arg.Name,
+							})
+						}
+
+						sh = &lspSignatureHelp{
+							Signatures: []lspSignatureInformation{
+								{
+									Label:           info.FullSignature,
+									Documentation:   doc,
+									Parameters:      ps,
+									ActiveParameter: active,
+								},
+							},
+						}
 					}
 				}
 			}

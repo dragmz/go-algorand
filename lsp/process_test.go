@@ -39,7 +39,6 @@ func TestProcessEmpty(t *testing.T) {
 
 	assert.Equal(t, 0, len(res.Keywords))
 	assert.Equal(t, 0, len(res.Lines))
-	assert.Equal(t, 0, len(res.Listing))
 	assert.Equal(t, 0, len(res.Macros))
 	assert.Equal(t, 0, len(res.MissRefs))
 	assert.Equal(t, 0, len(res.Numbers))
@@ -200,7 +199,7 @@ func TestInvalidByteInt(t *testing.T) {
 	int 2`)
 
 	assert.Len(t, res.Lines, 4)
-	assert.Len(t, res.Listing, 4)
+	assert.Len(t, res.Ops, 4)
 }
 
 func TestSemicolon(t *testing.T) {

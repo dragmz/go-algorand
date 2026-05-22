@@ -40,6 +40,7 @@ type SourceDiagnostic struct {
 type SourceAnalysisResult struct {
 	Lines       []SourceLine
 	Index       SourceIndex
+	Program     SourceProgram
 	OpStream    *OpStream
 	Diagnostics []SourceDiagnostic
 	Err         error
@@ -48,23 +49,31 @@ type SourceAnalysisResult struct {
 // AnalyzeSourceForTools analyzes source using the same version behavior as
 // AssembleString, including #pragma version and default assembler fallback.
 func AnalyzeSourceForTools(source string) SourceAnalysisResult {
-	return analyzeSourceForTools(source, assemblerNoVersion)
+	return AnalyzeSourceForToolsWithOptions(source, SourceToolOptions{})
 }
 
 // AnalyzeSourceForToolsWithVersion analyzes source using an explicit assembler
 // version, matching AssembleStringWithVersion.
 func AnalyzeSourceForToolsWithVersion(source string, version uint64) SourceAnalysisResult {
-	return analyzeSourceForTools(source, version)
+	return AnalyzeSourceForToolsWithOptions(source, SourceToolOptions{Version: version, UseVersion: true})
 }
 
-func analyzeSourceForTools(source string, version uint64) SourceAnalysisResult {
+// AnalyzeSourceForToolsWithOptions analyzes source for tooling with explicit
+// caller-owned context such as editor-selected run mode.
+func AnalyzeSourceForToolsWithOptions(source string, opts SourceToolOptions) SourceAnalysisResult {
 	lines := SourceLinesForTools(source)
+	version := assemblerNoVersion
+	if opts.UseVersion {
+		version = opts.Version
+	}
 	ops, err := AssembleStringWithVersion(source, version)
 	diagnostics := sourceDiagnosticsFromAssembly(lines, ops, err)
+	index := sourceIndexForTools(lines, ops)
 
 	return SourceAnalysisResult{
 		Lines:       lines,
-		Index:       sourceIndexForTools(lines, ops),
+		Index:       index,
+		Program:     sourceProgramForTools(lines, index, opts),
 		OpStream:    ops,
 		Diagnostics: diagnostics,
 		Err:         err,
