@@ -81,6 +81,45 @@ func TestSourceDiagnosticToLSP(t *testing.T) {
 	}, diag.Range)
 }
 
+func TestSourceDiagnosticSeverityToLSP(t *testing.T) {
+	assert.Equal(t, DiagnosticSeverity(DiagErr), sourceDiagnosticSeverityToLSP(logic.SourceDiagnosticError))
+	assert.Equal(t, DiagnosticSeverity(DiagWarn), sourceDiagnosticSeverityToLSP(logic.SourceDiagnosticWarning))
+	assert.Equal(t, DiagnosticSeverity(DiagInfo), sourceDiagnosticSeverityToLSP(logic.SourceDiagnosticInfo))
+}
+
+func TestSourceDocumentSymbolToLSP(t *testing.T) {
+	lines := logic.SourceLinesForTools("😀:\nb 😀")
+	symbol := sourceDocumentSymbolToLSP(lines, logic.SourceDocumentSymbol{
+		Name:           "😀",
+		Range:          logic.SourceRange{Line: 0, EndLine: 0, EndColumn: len("😀:")},
+		SelectionRange: logic.SourceRange{Line: 0, EndLine: 0, EndColumn: len("😀")},
+	})
+
+	assert.Equal(t, "😀", symbol.Name)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0},
+		End:   LspPosition{Line: 0, Character: 3},
+	}, symbol.Range)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0},
+		End:   LspPosition{Line: 0, Character: 2},
+	}, symbol.SelectionRange)
+}
+
+func TestSourceHighlightToLSP(t *testing.T) {
+	lines := logic.SourceLinesForTools("b 😀")
+	highlight := sourceHighlightToLSP(lines, logic.SourceHighlight{
+		Range: logic.SourceRange{Line: 0, Column: len("b "), EndLine: 0, EndColumn: len("b 😀")},
+	})
+
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0, Character: 2},
+		End:   LspPosition{Line: 0, Character: 4},
+	}, highlight.Range)
+	assert.NotNil(t, highlight.Kind)
+	assert.Equal(t, symbolHighlightKind, *highlight.Kind)
+}
+
 func TestSourceInlayToLSP(t *testing.T) {
 	lines := logic.SourceLinesForTools("int 😀")
 	hint := sourceInlayToLSP(lines, logic.SourceInlay{

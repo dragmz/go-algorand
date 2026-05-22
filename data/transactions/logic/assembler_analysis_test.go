@@ -18,6 +18,7 @@ package logic
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,4 +80,64 @@ func TestAnalyzeSourceForToolsWithVersion(t *testing.T) {
 	require.NoError(t, result.Err)
 	require.NotNil(t, result.OpStream)
 	require.Equal(t, uint64(2), result.OpStream.Version)
+}
+
+func TestSourceDiagnosticsForToolsProgramSize(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	result := AnalyzeSourceForTools("int 1")
+
+	require.Empty(t, SourceDiagnosticsForTools(result, SourceDiagnosticOptions{}))
+	require.Equal(t, []SourceDiagnostic{{
+		Message:  fmt.Sprintf("Program size: %d", len(result.OpStream.Program)),
+		Severity: SourceDiagnosticInfo,
+	}}, SourceDiagnosticsForTools(result, SourceDiagnosticOptions{ProgramSize: true}))
+
+	result = AnalyzeSourceForTools("unknown")
+	for _, diagnostic := range SourceDiagnosticsForTools(result, SourceDiagnosticOptions{ProgramSize: true}) {
+		require.NotEqual(t, SourceDiagnosticInfo, diagnostic.Severity)
+	}
+}
+
+func TestSourcePositionForProgramCounterForTools(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	result := AnalyzeSourceForTools("int 1")
+	pcs := sourceProgramCounters(result)
+	require.NotEmpty(t, pcs)
+
+	position, ok := SourcePositionForProgramCounterForTools(result, pcs[0])
+	require.True(t, ok)
+	require.Equal(t, SourcePosition{}, position)
+
+	_, ok = SourcePositionForProgramCounterForTools(result, -1)
+	require.False(t, ok)
+
+	_, ok = SourcePositionForProgramCounterForTools(SourceAnalysisResult{}, 0)
+	require.False(t, ok)
+}
+
+func TestSourceMapForTools(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	result := AnalyzeSourceForTools("int 1")
+
+	sourceMap, ok := SourceMapForTools(result, []string{"test.teal"})
+	require.True(t, ok)
+	require.Equal(t, []string{"test.teal"}, sourceMap.Sources)
+	require.NotEmpty(t, sourceMap.Mappings)
+
+	_, ok = SourceMapForTools(SourceAnalysisResult{}, []string{"test.teal"})
+	require.False(t, ok)
+}
+
+func TestSourceModeForTools(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	require.Equal(t, ModeApp, SourceModeForTools(SourceLinesForTools("")))
+	require.Equal(t, ModeSig, SourceModeForTools(SourceLinesForTools("// #pragma mode logicsig")))
 }

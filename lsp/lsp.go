@@ -29,7 +29,7 @@ const (
 
 type lspDoc struct {
 	s   string
-	res *ProcessResult
+	res *logic.SourceAnalysisResult
 }
 
 func (d *lspDoc) Update(s string) {
@@ -37,7 +37,7 @@ func (d *lspDoc) Update(s string) {
 	d.res = nil
 }
 
-func (d *lspDoc) Results() *ProcessResult {
+func (d *lspDoc) Results() *logic.SourceAnalysisResult {
 	if d.res == nil {
 		d.res = Process(d.s)
 	}
@@ -893,7 +893,7 @@ func (l *lsp) reportProgressEnd(token interface{}, message string) error {
 	})
 }
 
-func (l *lsp) prepare(uri string) (*lspDoc, *ProcessResult, error) {
+func (l *lsp) prepare(uri string) (*lspDoc, *logic.SourceAnalysisResult, error) {
 	doc := l.docs[uri]
 	if doc == nil {
 		return nil, nil, errors.New("doc not found")
@@ -1014,14 +1014,20 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					})
 				}
 
-				if res.AssembleError != nil {
+				if res.Err != nil {
 					return l.fail(h.Id, lspError{
 						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to assemble document: %v", res.AssembleError),
+						Message: fmt.Sprintf("failed to assemble document: %v", res.Err),
 					})
 				}
 
-				sm := logic.GetSourceMap([]string{body.Params.Arguments.Uri}, res.OpStream.OffsetToSource)
+				sm, ok := logic.SourceMapForTools(*res, []string{body.Params.Arguments.Uri})
+				if !ok {
+					return l.fail(h.Id, lspError{
+						Code:    ErrorCodeRequestFailed,
+						Message: "no opstream",
+					})
+				}
 				return l.success(h.Id, tealGenerateSourcemapCommandResult{
 					SourceMap: sm,
 				})
@@ -1076,21 +1082,14 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					})
 				}
 
-				if res.AssembleError != nil {
+				if res.Err != nil {
 					return l.fail(h.Id, lspError{
 						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to assemble document: %v", res.AssembleError),
+						Message: fmt.Sprintf("failed to assemble document: %v", res.Err),
 					})
 				}
 
-				if res.OpStream == nil || res.OpStream.OffsetToSource == nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: "no opstream",
-					})
-				}
-
-				loc, ok := res.OpStream.OffsetToSource[body.Params.Arguments.Pc]
+				pos, ok := logic.SourcePositionForProgramCounterForTools(*res, body.Params.Arguments.Pc)
 				if !ok {
 					return l.fail(h.Id, lspError{
 						Code:    ErrorCodeRequestFailed,
@@ -1099,7 +1098,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				}
 
 				return l.success(h.Id, LspPosition{
-					Line: loc.Line, Character: loc.Column,
+					Line: pos.Line, Character: pos.Column,
 				})
 
 			case "teal.version.update":
@@ -1132,7 +1131,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				res := doc.Results()
 				edits := []lspTextEdit{
-					sourceEditToLSP(res.SourceLines, logic.SourceEditUpdateVersionForTools(res.SourceIndex, arg.Version)),
+					sourceEditToLSP(res.Lines, logic.SourceEditUpdateVersionForTools(res.Index, arg.Version)),
 				}
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
@@ -1246,7 +1245,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				line := arg.Line
 				statement := arg.Statement
 				res := doc.Results()
-				edit, ok := logic.SourceEditRemoveStatementForTools(res.SourceLines, line, statement)
+				edit, ok := logic.SourceEditRemoveStatementForTools(res.Lines, line, statement)
 				if !ok {
 					return l.fail(h.Id, lspError{
 						Code:    ErrorCodeInvalidParams,
@@ -1254,7 +1253,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					})
 				}
 
-				edits := []lspTextEdit{sourceEditToLSP(res.SourceLines, edit)}
+				edits := []lspTextEdit{sourceEditToLSP(res.Lines, edit)}
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: "Remove call",
@@ -1308,7 +1307,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 				name := arg.Name
 
-				edits := sourceEditsToLSP(res.SourceLines, logic.SourceEditsRemoveSymbolForTools(res.SourceIndex, body.Params.Arguments[0].Name))
+				edits := sourceEditsToLSP(res.Lines, logic.SourceEditsRemoveSymbolForTools(res.Index, body.Params.Arguments[0].Name))
 
 				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
 					Label: fmt.Sprintf("Remove label: %s", name),
@@ -1371,7 +1370,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
 									Uri: arg.Uri,
 								},
-								Edits: sourceEditsToLSP(res.SourceLines, []logic.SourceEdit{logic.SourceEditCreateLabelForTools(res.SourceLines, name)}),
+								Edits: sourceEditsToLSP(res.Lines, []logic.SourceEdit{logic.SourceEditCreateLabelForTools(res.Lines, name)}),
 							},
 						},
 					},
@@ -1416,25 +1415,17 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				})
 			}
 
-			column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-			identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, req.Params.Position.Line, column)
+			column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+			rename, ok := logic.SourcePrepareRenameForTools(*res, req.Params.Position.Line, column)
 			if ok {
-				rg := LspRange{}
-				if identifier.Symbol != nil {
-					rg = sourceSymbolNameRangeToLSP(res.SourceLines, *identifier.Symbol)
-				}
-				if identifier.Reference != nil {
-					rg = sourceReferenceRangeToLSP(res.SourceLines, *identifier.Reference)
-				}
-
 				err = l.reportProgressEnd(req.Params.WorkDoneToken, "Symbol ready for rename")
 				if err != nil {
 					l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
 				}
 
 				return l.success(h.Id, lspPrepareRenameResponse{
-					Range:       rg,
-					Placeholder: identifier.Name,
+					Range:       sourceRangeToLSP(res.Lines, rename.Range),
+					Placeholder: rename.Placeholder,
 				})
 			}
 
@@ -1470,11 +1461,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			chs := []lspTextEdit{}
 
-			column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-			identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, req.Params.Position.Line, column)
-			if ok {
-				chs = append(chs, sourceEditsToLSP(res.SourceLines, logic.SourceEditsRenameSymbolForTools(res.SourceIndex, identifier.Name, req.Params.NewName))...)
-			}
+			column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+			chs = append(chs, sourceEditsToLSP(res.Lines, logic.SourceRenameEditsForTools(*res, req.Params.Position.Line, column, req.Params.NewName))...)
 
 			message := fmt.Sprintf("Renamed %d locations", len(chs))
 			err = l.reportProgressEnd(req.Params.WorkDoneToken, message)
@@ -1515,9 +1503,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, lens := range logic.SourceCodeLensesForTools(res.sourceAnalysis()) {
+				for _, lens := range logic.SourceCodeLensesForTools(*res) {
 					if sourceCodeLensEnabled(l.config, lens) {
-						cls = append(cls, sourceCodeLensToLSP(res.SourceLines, lens))
+						cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
 					}
 				}
 			}
@@ -1537,9 +1525,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, inlay := range logic.SourceInlaysForTools(res.sourceAnalysis()) {
-					if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.SourceLines, inlay, req.Params.Range) {
-						ihs = append(ihs, sourceInlayToLSP(res.SourceLines, inlay))
+				for _, inlay := range logic.SourceInlaysForTools(*res) {
+					if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.Lines, inlay, req.Params.Range) {
+						ihs = append(ihs, sourceInlayToLSP(res.Lines, inlay))
 					}
 				}
 			}
@@ -1557,8 +1545,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				ccs = sourceCompletionsToLSP(logic.SourceCompletionsForTools(res.sourceAnalysis(), req.Params.Position.Line, column))
+				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+				ccs = sourceCompletionsToLSP(logic.SourceCompletionsForTools(*res, req.Params.Position.Line, column))
 			}
 
 			if len(ccs) == 0 {
@@ -1582,8 +1570,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				hover, ok := logic.SourceHoverForTools(res.sourceAnalysis(), req.Params.Position.Line, column)
+				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+				hover, ok := logic.SourceHoverForTools(*res, req.Params.Position.Line, column)
 				if ok {
 					c = lspHover{
 						Contents: lspMarkupContent{
@@ -1609,15 +1597,11 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				ref, ok := logic.SourceReferenceAtForTools(res.SourceIndex, req.Params.Position.Line, column)
-				if !ok {
-					return l.success(h.Id, ls)
-				}
-				for _, sym := range logic.SourceSymbolsByNameForTools(res.SourceIndex, ref.Name) {
+				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+				for _, rg := range logic.SourceDefinitionsForTools(*res, req.Params.Position.Line, column) {
 					ls = append(ls, lspLocation{
 						Uri:   req.Params.TextDocument.Uri,
-						Range: sourceSymbolNameRangeToLSP(res.SourceLines, sym),
+						Range: sourceRangeToLSP(res.Lines, rg),
 					})
 				}
 			}
@@ -1639,7 +1623,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			if err == nil {
 				// TODO: implement formatting
 				formatted := doc.s
-				te = []lspTextEdit{prepareReplaceAllTextEdit(len(res.SourceLines), formatted)}
+				te = []lspTextEdit{prepareReplaceAllTextEdit(len(res.Lines), formatted)}
 			}
 
 			return l.success(h.Id, te)
@@ -1657,8 +1641,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				help, ok := logic.SourceSignatureHelpForTools(res.sourceAnalysis(), req.Params.Position.Line, column)
+				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+				help, ok := logic.SourceSignatureHelpForTools(*res, req.Params.Position.Line, column)
 				if ok {
 					active := new(int)
 					*active = help.ActiveParameter
@@ -1706,9 +1690,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				rg := sourceRangeFromLSP(res.SourceLines, req.Params.Range)
-				for _, action := range logic.SourceActionsForTools(res.SourceLines, res.SourceIndex, res.SourceProgram, rg) {
-					cas = append(cas, sourceActionToLSP(req.Params.TextDocument.Uri, res.SourceLines, action))
+				rg := sourceRangeFromLSP(res.Lines, req.Params.Range)
+				for _, action := range logic.SourceActionsForTools(res.Lines, res.Index, res.Program, rg) {
+					cas = append(cas, sourceActionToLSP(req.Params.TextDocument.Uri, res.Lines, action))
 				}
 			}
 
@@ -1726,29 +1710,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, diagnostic := range res.AssemblerDiagnostics {
-					ds = append(ds, sourceDiagnosticToLSP(res.SourceLines, diagnostic))
-				}
-
-				if l.config.ProgramSize {
-					if res.AssembleError == nil && res.OpStream != nil {
-						info := DiagInfo
-
-						ds = append(ds, LspDiagnostic{
-							Range: LspRange{
-								Start: LspPosition{
-									Line:      0,
-									Character: 0,
-								},
-								End: LspPosition{
-									Line:      0,
-									Character: 0,
-								},
-							},
-							Severity: &info,
-							Message:  fmt.Sprintf("Program size: %d", len(res.OpStream.Program)),
-						})
-					}
+				for _, diagnostic := range logic.SourceDiagnosticsForTools(*res, logic.SourceDiagnosticOptions{ProgramSize: l.config.ProgramSize}) {
+					ds = append(ds, sourceDiagnosticToLSP(res.Lines, diagnostic))
 				}
 			}
 
@@ -1770,16 +1733,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				column := res.sourceColumn(req.Params.Position.Line, req.Params.Position.Character)
-				identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, req.Params.Position.Line, column)
-				if ok {
-					for _, sym := range logic.SourceSymbolsByNameForTools(res.SourceIndex, identifier.Name) {
-						hs = append(hs, sourceSymbolHighlight(res.SourceLines, sym))
-					}
-
-					for _, ref := range logic.SourceReferencesByNameForTools(res.SourceIndex, identifier.Name) {
-						hs = append(hs, sourceReferenceHighlight(res.SourceLines, ref))
-					}
+				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+				for _, highlight := range logic.SourceHighlightsForTools(*res, req.Params.Position.Line, column) {
+					hs = append(hs, sourceHighlightToLSP(res.Lines, highlight))
 				}
 			}
 
@@ -1796,8 +1752,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			syms := []LspDocumentSymbol{}
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, s := range res.SourceIndex.Symbols {
-					syms = append(syms, sourceSymbolDocument(res.SourceLines, s))
+				for _, symbol := range logic.SourceDocumentSymbolsForTools(*res) {
+					syms = append(syms, sourceDocumentSymbolToLSP(res.Lines, symbol))
 				}
 			}
 			return l.success(h.Id, syms)
@@ -1814,8 +1770,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			st := SemanticTokens{}
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, token := range logic.SourceSemanticTokensForTools(res.sourceAnalysis()) {
-					st = append(st, sourceSemanticTokenToLSP(res.SourceLines, token))
+				for _, token := range logic.SourceSemanticTokensForTools(*res) {
+					st = append(st, sourceSemanticTokenToLSP(res.Lines, token))
 				}
 			}
 
@@ -2257,18 +2213,6 @@ func sourcePositionToLSP(lines []logic.SourceLine, pos logic.SourcePosition) Lsp
 	}
 }
 
-func sourceSymbolNameRangeToLSP(lines []logic.SourceLine, symbol logic.SourceSymbol) LspRange {
-	return sourceRangeToLSP(lines, logic.SourceSymbolNameRangeForTools(symbol))
-}
-
-func sourceSymbolRangeToLSP(lines []logic.SourceLine, symbol logic.SourceSymbol) LspRange {
-	return sourceRangeToLSP(lines, logic.SourceSymbolRangeForTools(symbol))
-}
-
-func sourceReferenceRangeToLSP(lines []logic.SourceLine, ref logic.SourceReference) LspRange {
-	return sourceRangeToLSP(lines, logic.SourceReferenceRangeForTools(ref))
-}
-
 func sourceSemanticTokenToLSP(lines []logic.SourceLine, token logic.SourceSemanticToken) SemanticToken {
 	rg := sourceRangeToLSP(lines, token.Range)
 	return SemanticToken{
@@ -2303,31 +2247,23 @@ func sourceSemanticTokenTypeToLSP(kind logic.SourceSemanticTokenKind) int {
 	}
 }
 
-func sourceSymbolDocument(lines []logic.SourceLine, symbol logic.SourceSymbol) LspDocumentSymbol {
-	r := sourceSymbolRangeToLSP(lines, symbol)
+func sourceDocumentSymbolToLSP(lines []logic.SourceLine, symbol logic.SourceDocumentSymbol) LspDocumentSymbol {
 	return LspDocumentSymbol{
 		Name:           symbol.Name,
 		Kind:           LspSymbolKindMethod,
-		Range:          r,
-		SelectionRange: sourceSymbolNameRangeToLSP(lines, symbol),
+		Range:          sourceRangeToLSP(lines, symbol.Range),
+		SelectionRange: sourceRangeToLSP(lines, symbol.SelectionRange),
 	}
 }
 
-func sourceReferenceHighlight(lines []logic.SourceLine, ref logic.SourceReference) lspDocumentHighlight {
+func sourceHighlightToLSP(lines []logic.SourceLine, highlight logic.SourceHighlight) lspDocumentHighlight {
 	return lspDocumentHighlight{
-		Range: sourceReferenceRangeToLSP(lines, ref),
+		Range: sourceRangeToLSP(lines, highlight.Range),
 		Kind:  &symbolHighlightKind,
 	}
 }
 
 var symbolHighlightKind = 1
-
-func sourceSymbolHighlight(lines []logic.SourceLine, symbol logic.SourceSymbol) lspDocumentHighlight {
-	return lspDocumentHighlight{
-		Range: sourceSymbolNameRangeToLSP(lines, symbol),
-		Kind:  &symbolHighlightKind,
-	}
-}
 
 func sourceDiagnosticToLSP(lines []logic.SourceLine, diagnostic logic.SourceDiagnostic) LspDiagnostic {
 	sev := int(sourceDiagnosticSeverityToLSP(diagnostic.Severity))
@@ -2354,6 +2290,8 @@ func sourceDiagnosticToLSP(lines []logic.SourceLine, diagnostic logic.SourceDiag
 
 func sourceDiagnosticSeverityToLSP(severity logic.SourceDiagnosticSeverity) DiagnosticSeverity {
 	switch severity {
+	case logic.SourceDiagnosticInfo:
+		return DiagInfo
 	case logic.SourceDiagnosticWarning:
 		return DiagWarn
 	default:

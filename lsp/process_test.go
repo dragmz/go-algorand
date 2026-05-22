@@ -35,25 +35,25 @@ func TestProcessEmpty(t *testing.T) {
 	res := Process("")
 
 	assert.Equal(t, logic.ModeApp, res.Mode)
-	assert.Equal(t, uint64(1), res.Version)
+	assert.Equal(t, uint64(1), res.Index.Version)
 
-	assert.Equal(t, 0, len(res.SourceIndex.MissingReferences))
-	assert.Equal(t, 0, len(res.SourceIndex.Redundants))
-	assert.Equal(t, 0, len(res.SourceIndex.RefCounts))
-	assert.Equal(t, 0, len(res.SourceLines))
-	assert.Equal(t, 0, len(res.SourceProgram.Operations))
-	assert.Equal(t, 0, len(res.SourceProgram.RequiredVersions))
-	assert.Equal(t, 0, len(res.SourceProgram.TokenClasses))
-	assert.Equal(t, 0, len(res.SourceIndex.References))
-	assert.Equal(t, 0, len(res.SourceIndex.Symbols))
+	assert.Equal(t, 0, len(res.Index.MissingReferences))
+	assert.Equal(t, 0, len(res.Index.Redundants))
+	assert.Equal(t, 0, len(res.Index.RefCounts))
+	assert.Equal(t, 0, len(res.Lines))
+	assert.Equal(t, 0, len(res.Program.Operations))
+	assert.Equal(t, 0, len(res.Program.RequiredVersions))
+	assert.Equal(t, 0, len(res.Program.TokenClasses))
+	assert.Equal(t, 0, len(res.Index.References))
+	assert.Equal(t, 0, len(res.Index.Symbols))
 }
 
 func TestRedundantLabelLine(t *testing.T) {
 	res := Process("test_label:")
 
-	assert.Len(t, res.SourceIndex.Redundants, 1)
+	assert.Len(t, res.Index.Redundants, 1)
 
-	r := res.SourceIndex.Redundants[0]
+	r := res.Index.Redundants[0]
 
 	assert.Equal(t, 0, r.Line)
 	assert.Equal(t, "Remove label 'test_label'", r.Message)
@@ -62,11 +62,11 @@ func TestRedundantLabelLine(t *testing.T) {
 func TestRedundantBCallLine(t *testing.T) {
 	res := Process("b a\na:")
 
-	if len(res.SourceIndex.Redundants) != 1 {
+	if len(res.Index.Redundants) != 1 {
 		t.Error("len mismatch")
 	}
 
-	r := res.SourceIndex.Redundants[0]
+	r := res.Index.Redundants[0]
 
 	assert.Equal(t, 0, r.Line)
 	assert.Equal(t, "Remove b call", r.Message)
@@ -75,7 +75,7 @@ func TestRedundantBCallLine(t *testing.T) {
 func TestIntArgCompletions(t *testing.T) {
 	res := Process("int ")
 
-	vals := logic.SourceCompletionsForTools(res.sourceAnalysis(), 0, res.sourceColumn(0, 4))
+	vals := logic.SourceCompletionsForTools(*res, 0, sourceColumn(res.Lines, 0, 4))
 
 	m := map[string]bool{}
 	for _, v := range vals {
@@ -105,8 +105,8 @@ b test_label
 	}
 
 	for i, test := range tests {
-		column := res.sourceColumn(test.i.StartLine(), test.i.StartCharacter())
-		identifier, ok := logic.SourceIdentifierAtForTools(res.SourceIndex, test.i.StartLine(), column)
+		column := sourceColumn(res.Lines, test.i.StartLine(), test.i.StartCharacter())
+		identifier, ok := logic.SourceIdentifierAtForTools(res.Index, test.i.StartLine(), column)
 		if assert.True(t, ok, fmt.Sprintf("test #%d", i)) {
 			assert.Equal(t, test.o, identifier.Name, fmt.Sprintf("test #%d", i))
 		}
@@ -164,7 +164,7 @@ func TestInlayHints(t *testing.T) {
 		name := fmt.Sprintf("test #%d", i)
 
 		res := Process(ts)
-		ihs := logic.SourceInlayHintsForTools(res.SourceLines, res.SourceProgram)
+		ihs := logic.SourceInlayHintsForTools(res.Lines, res.Program)
 
 		var decoded []logic.SourceInlayHint
 		for _, hint := range ihs {
@@ -181,19 +181,19 @@ func TestInlayHints(t *testing.T) {
 
 func TestRefCounts(t *testing.T) {
 	res := Process("b a\nb a\nb a\na:")
-	assert.Equal(t, 3, res.SourceIndex.RefCounts["a"])
+	assert.Equal(t, 3, res.Index.RefCounts["a"])
 }
 
 func TestVersion(t *testing.T) {
 	res := Process("#pragma version 8")
-	assert.Equal(t, uint64(8), res.Version)
+	assert.Equal(t, uint64(8), res.Index.Version)
 }
 
 func TestRequiredVersion(t *testing.T) {
 	res := Process("box_create")
-	assert.Len(t, res.SourceProgram.RequiredVersions, 1)
+	assert.Len(t, res.Program.RequiredVersions, 1)
 
-	v := res.SourceProgram.RequiredVersions[0]
+	v := res.Program.RequiredVersions[0]
 	assert.Equal(t, uint64(8), v.Version)
 }
 
@@ -203,37 +203,37 @@ func TestInvalidByteInt(t *testing.T) {
 	int 1
 	int 2`)
 
-	assert.Len(t, res.SourceLines, 4)
-	assert.Len(t, res.SourceProgram.Operations, 4)
+	assert.Len(t, res.Lines, 4)
+	assert.Len(t, res.Program.Operations, 4)
 }
 
 func TestSemicolon(t *testing.T) {
 	res := Process("int 1; int 2")
-	assert.Len(t, res.SourceLines, 1)
+	assert.Len(t, res.Lines, 1)
 
-	assert.Len(t, res.SourceLines[0].Statements, 2)
-	assert.Len(t, res.SourceLines[0].Statements[0].Tokens, 2)
-	assert.Len(t, res.SourceLines[0].Statements[1].Tokens, 2)
+	assert.Len(t, res.Lines[0].Statements, 2)
+	assert.Len(t, res.Lines[0].Statements[0].Tokens, 2)
+	assert.Len(t, res.Lines[0].Statements[1].Tokens, 2)
 
-	assert.Len(t, res.SourceLines[0].Tokens, 5)
+	assert.Len(t, res.Lines[0].Tokens, 5)
 }
 
 func TestSemicolonEmptySubs(t *testing.T) {
 	res := Process("int 1;")
-	assert.Len(t, res.SourceLines[0].Statements, 2)
+	assert.Len(t, res.Lines[0].Statements, 2)
 }
 
 func TestMultiSemicolon(t *testing.T) {
 	res := Process(";;;")
-	assert.Len(t, res.SourceLines, 1)
+	assert.Len(t, res.Lines, 1)
 
-	assert.Len(t, res.SourceLines[0].Statements, 4)
-	assert.Len(t, res.SourceLines[0].Statements[0].Tokens, 0)
-	assert.Len(t, res.SourceLines[0].Statements[1].Tokens, 0)
-	assert.Len(t, res.SourceLines[0].Statements[2].Tokens, 0)
-	assert.Len(t, res.SourceLines[0].Statements[3].Tokens, 0)
+	assert.Len(t, res.Lines[0].Statements, 4)
+	assert.Len(t, res.Lines[0].Statements[0].Tokens, 0)
+	assert.Len(t, res.Lines[0].Statements[1].Tokens, 0)
+	assert.Len(t, res.Lines[0].Statements[2].Tokens, 0)
+	assert.Len(t, res.Lines[0].Statements[3].Tokens, 0)
 
-	assert.Len(t, res.SourceLines[0].Tokens, 3)
+	assert.Len(t, res.Lines[0].Tokens, 3)
 }
 
 func TestAssemblerSourceTokenizationRegressions(t *testing.T) {
@@ -257,14 +257,14 @@ func TestAssemblerSourceTokenizationRegressions(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			res := Process(test.source)
-			if !assert.Len(t, res.SourceLines, 1) {
+			if !assert.Len(t, res.Lines, 1) {
 				return
 			}
-			if !assert.Len(t, res.SourceLines[0].Statements, 1) {
+			if !assert.Len(t, res.Lines[0].Statements, 1) {
 				return
 			}
 			var got []string
-			for _, token := range res.SourceLines[0].Statements[0].Tokens {
+			for _, token := range res.Lines[0].Statements[0].Tokens {
 				got = append(got, token.Text)
 			}
 			assert.Equal(t, test.tokens, got)
@@ -297,7 +297,7 @@ func getAvailableOps(source string) []string {
 
 	available := []string{}
 
-	for _, item := range logic.ToolOpcodesForTools(res.Version, res.Mode) {
+	for _, item := range logic.ToolOpcodesForTools(res.Index.Version, res.Mode) {
 		available = append(available, item.Name)
 	}
 
@@ -351,13 +351,13 @@ func TestDefineRef(t *testing.T) {
 	#define VALUE 123
 	VALUE`)
 
-	assert.Len(t, res.SourceIndex.Symbols, 1)
-	assert.Equal(t, "VALUE", res.SourceIndex.Symbols[0].Name)
-	assert.Equal(t, 1, res.SourceIndex.Symbols[0].Line)
+	assert.Len(t, res.Index.Symbols, 1)
+	assert.Equal(t, "VALUE", res.Index.Symbols[0].Name)
+	assert.Equal(t, 1, res.Index.Symbols[0].Line)
 
-	assert.Len(t, res.SourceIndex.References, 1)
-	assert.Equal(t, "VALUE", res.SourceIndex.References[0].Name)
-	assert.Equal(t, 2, res.SourceIndex.References[0].Line)
+	assert.Len(t, res.Index.References, 1)
+	assert.Equal(t, "VALUE", res.Index.References[0].Name)
+	assert.Equal(t, 2, res.Index.References[0].Line)
 }
 
 func TestDefineValueRef(t *testing.T) {
@@ -365,13 +365,13 @@ func TestDefineValueRef(t *testing.T) {
 	#define VALUE 123
 	int VALUE`)
 
-	assert.Len(t, res.SourceIndex.Symbols, 1)
-	assert.Equal(t, "VALUE", res.SourceIndex.Symbols[0].Name)
-	assert.Equal(t, 1, res.SourceIndex.Symbols[0].Line)
+	assert.Len(t, res.Index.Symbols, 1)
+	assert.Equal(t, "VALUE", res.Index.Symbols[0].Name)
+	assert.Equal(t, 1, res.Index.Symbols[0].Line)
 
-	assert.Len(t, res.SourceIndex.References, 1)
-	assert.Equal(t, "VALUE", res.SourceIndex.References[0].Name)
-	assert.Equal(t, 2, res.SourceIndex.References[0].Line)
+	assert.Len(t, res.Index.References, 1)
+	assert.Equal(t, "VALUE", res.Index.References[0].Name)
+	assert.Equal(t, 2, res.Index.References[0].Line)
 }
 
 func TestStringDoesConflictWithDefine(t *testing.T) {
@@ -380,8 +380,8 @@ func TestStringDoesConflictWithDefine(t *testing.T) {
 	byte "VALUE"`)
 
 	assert.Len(t, sourceTokensByClass(res, logic.SourceTokenClassString), 1)
-	assert.Len(t, res.SourceIndex.Symbols, 1)
-	assert.Empty(t, res.SourceIndex.References)
+	assert.Len(t, res.Index.Symbols, 1)
+	assert.Empty(t, res.Index.References)
 }
 
 func TestEmojiLabelAndBranch(t *testing.T) {
@@ -404,14 +404,14 @@ func TestEmojiLabelAndBranch(t *testing.T) {
 			res := Process(src)
 
 			// symbol detected
-			if !assert.Len(t, res.SourceIndex.Symbols, 1) {
+			if !assert.Len(t, res.Index.Symbols, 1) {
 				return
 			}
-			sym := res.SourceIndex.Symbols[0]
+			sym := res.Index.Symbols[0]
 			assert.Equal(t, name, sym.Name)
 
 			// branch reference detected
-			refs := logic.SourceReferencesByNameForTools(res.SourceIndex, name)
+			refs := logic.SourceReferencesByNameForTools(res.Index, name)
 			if !assert.Len(t, refs, 1) {
 				return
 			}
@@ -430,9 +430,9 @@ func TestEmojiLabelAndBranch(t *testing.T) {
 	}
 }
 
-func sourceTokensByClass(res *ProcessResult, kind logic.SourceTokenClassKind) []logic.SourceToken {
+func sourceTokensByClass(res *logic.SourceAnalysisResult, kind logic.SourceTokenClassKind) []logic.SourceToken {
 	var tokens []logic.SourceToken
-	for _, class := range res.SourceProgram.TokenClasses {
+	for _, class := range res.Program.TokenClasses {
 		if class.Kind == kind {
 			tokens = append(tokens, class.Token)
 		}

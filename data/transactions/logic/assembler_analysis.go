@@ -16,6 +16,8 @@
 
 package logic
 
+import "fmt"
+
 // SourceDiagnosticSeverity classifies diagnostics returned by
 // AnalyzeSourceForTools.
 type SourceDiagnosticSeverity int
@@ -23,6 +25,7 @@ type SourceDiagnosticSeverity int
 const (
 	SourceDiagnosticError SourceDiagnosticSeverity = iota + 1
 	SourceDiagnosticWarning
+	SourceDiagnosticInfo
 )
 
 // SourceDiagnostic is a public, normalized assembler diagnostic. Line and
@@ -33,6 +36,12 @@ type SourceDiagnostic struct {
 	Line      int
 	Column    int
 	EndColumn int
+}
+
+// SourceDiagnosticOptions controls optional diagnostics derived from successful
+// source analysis.
+type SourceDiagnosticOptions struct {
+	ProgramSize bool
 }
 
 // SourceAnalysisResult combines assembler source structure with assembly output
@@ -84,6 +93,41 @@ func AnalyzeSourceForToolsWithOptions(source string, opts SourceToolOptions) Sou
 		Diagnostics: diagnostics,
 		Err:         err,
 	}
+}
+
+// SourceDiagnosticsForTools returns diagnostics derived from assembler analysis
+// and optional tooling annotations.
+func SourceDiagnosticsForTools(result SourceAnalysisResult, opts SourceDiagnosticOptions) []SourceDiagnostic {
+	diagnostics := append([]SourceDiagnostic(nil), result.Diagnostics...)
+	if opts.ProgramSize && result.Err == nil && result.OpStream != nil {
+		diagnostics = append(diagnostics, SourceDiagnostic{
+			Message:  fmt.Sprintf("Program size: %d", len(result.OpStream.Program)),
+			Severity: SourceDiagnosticInfo,
+		})
+	}
+	return diagnostics
+}
+
+// SourcePositionForProgramCounterForTools returns the source position mapped to
+// the requested bytecode program counter.
+func SourcePositionForProgramCounterForTools(result SourceAnalysisResult, pc int) (SourcePosition, bool) {
+	if result.OpStream == nil || result.OpStream.OffsetToSource == nil {
+		return SourcePosition{}, false
+	}
+	loc, ok := result.OpStream.OffsetToSource[pc]
+	if !ok {
+		return SourcePosition{}, false
+	}
+	return SourcePosition{Line: loc.Line, Column: loc.Column}, true
+}
+
+// SourceMapForTools returns a source map derived from successful source
+// analysis.
+func SourceMapForTools(result SourceAnalysisResult, sourceNames []string) (SourceMap, bool) {
+	if result.OpStream == nil || result.OpStream.OffsetToSource == nil {
+		return SourceMap{}, false
+	}
+	return GetSourceMap(sourceNames, result.OpStream.OffsetToSource), true
 }
 
 func sourceDiagnosticsFromAssembly(lines []SourceLine, ops *OpStream, err error) []SourceDiagnostic {

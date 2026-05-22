@@ -6,36 +6,11 @@ import (
 	"github.com/algorand/go-algorand/data/transactions/logic"
 )
 
-type ProcessResult struct {
-	Mode logic.RunMode
-
-	Version uint64
-
-	SourceLines          []logic.SourceLine
-	SourceIndex          logic.SourceIndex
-	SourceProgram        logic.SourceProgram
-	AssemblerDiagnostics []logic.SourceDiagnostic
-	OpStream             *logic.OpStream
-	AssembleError        error
-}
-
-func (r ProcessResult) sourceAnalysis() logic.SourceAnalysisResult {
-	return logic.SourceAnalysisResult{
-		Lines:       r.SourceLines,
-		Index:       r.SourceIndex,
-		Program:     r.SourceProgram,
-		Mode:        r.Mode,
-		OpStream:    r.OpStream,
-		Diagnostics: r.AssemblerDiagnostics,
-		Err:         r.AssembleError,
-	}
-}
-
-func (r ProcessResult) sourceColumn(line int, character int) int {
-	if line < 0 || line >= len(r.SourceLines) {
+func sourceColumn(lines []logic.SourceLine, line int, character int) int {
+	if line < 0 || line >= len(lines) {
 		return character
 	}
-	return byteColumnFromUTF16Column(r.SourceLines[line].Text, character)
+	return byteColumnFromUTF16Column(lines[line].Text, character)
 }
 
 func utf16ColumnFromByte(line string, column int) int {
@@ -69,21 +44,12 @@ func byteColumnFromUTF16Column(line string, character int) int {
 	return len(line)
 }
 
-func Process(source string) *ProcessResult {
+func Process(source string) *logic.SourceAnalysisResult {
 	initialLines := logic.SourceLinesForTools(source)
-	mode := sourceModeForLSP(initialLines)
+	mode := logic.SourceModeForTools(initialLines)
 	analysis := logic.AnalyzeSourceForToolsWithOptions(source, logic.SourceToolOptions{
 		Mode: mode,
 	})
 
-	return &ProcessResult{
-		Mode:                 analysis.Mode,
-		Version:              analysis.Index.Version,
-		SourceLines:          analysis.Lines,
-		SourceIndex:          analysis.Index,
-		SourceProgram:        analysis.Program,
-		AssemblerDiagnostics: analysis.Diagnostics,
-		OpStream:             analysis.OpStream,
-		AssembleError:        analysis.Err,
-	}
+	return &analysis
 }
