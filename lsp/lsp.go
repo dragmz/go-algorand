@@ -1515,46 +1515,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				if l.config.LensRefs {
-					for _, sym := range res.SourceIndex.Symbols {
-						count := res.SourceIndex.RefCounts[sym.Name]
-						if count > 0 {
-							cls = append(cls, LspCodeLens{
-								Range: LspRange{
-									Start: LspPosition{
-										Line: sym.Line,
-									},
-									End: LspPosition{
-										Line: sym.Line,
-									},
-								},
-								Command: &LspCommand{
-									Title: fmt.Sprintf("refs: %d", count),
-								},
-							})
-						}
-					}
-				}
-
-				if l.config.PcLens {
-					if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
-						for pc, loc := range res.OpStream.OffsetToSource {
-							cls = append(cls, LspCodeLens{
-								Range: LspRange{
-									Start: LspPosition{
-										Line:      loc.Line,
-										Character: loc.Column,
-									},
-									End: LspPosition{
-										Line:      loc.Line,
-										Character: loc.Column,
-									},
-								},
-								Command: &LspCommand{
-									Title: fmt.Sprintf("pc: %d", pc),
-								},
-							})
-						}
+				for _, lens := range logic.SourceCodeLensesForTools(res.sourceAnalysis()) {
+					if sourceCodeLensEnabled(l.config, lens) {
+						cls = append(cls, sourceCodeLensToLSP(res.SourceLines, lens))
 					}
 				}
 			}
@@ -1574,69 +1537,9 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				parameter := new(int)
-				*parameter = 2
-
-				padding := new(bool)
-				*padding = true
-
-				hs := logic.SourceInlayHintsForTools(res.SourceLines, res.SourceProgram)
-
-				if l.config.InlayNamed {
-					for _, named := range hs {
-						if named.Kind != logic.SourceInlayHintNamed {
-							continue
-						}
-						tok, ok := tokenFromSourceTokenInLines(res.SourceLines, named.Token)
-						if !ok || !Overlaps(tok, req.Params.Range) {
-							continue
-						}
-						ihs = append(ihs, LspInlayHint{
-							Position: LspPosition{
-								Line:      tok.Line(),
-								Character: tok.End(),
-							},
-							Label:       named.Label,
-							Kind:        parameter,
-							PaddingLeft: padding,
-						})
-					}
-				}
-
-				if l.config.InlayDecoded {
-					for _, decoded := range hs {
-						if decoded.Kind != logic.SourceInlayHintDecoded {
-							continue
-						}
-						tok, ok := tokenFromSourceTokenInLines(res.SourceLines, decoded.Token)
-						if !ok || !Overlaps(tok, req.Params.Range) {
-							continue
-						}
-						ihs = append(ihs, LspInlayHint{
-							Position: LspPosition{
-								Line:      tok.Line(),
-								Character: tok.End(),
-							},
-							Label:       decoded.Label,
-							Kind:        parameter,
-							PaddingLeft: padding,
-						})
-
-					}
-				}
-
-				if l.config.PcInlay {
-					if res.OpStream != nil && res.OpStream.OffsetToSource != nil {
-						for pc, loc := range res.OpStream.OffsetToSource {
-							ihs = append(ihs, LspInlayHint{
-								Position: LspPosition{
-									Line:      loc.Line,
-									Character: loc.Column,
-								},
-								Label: fmt.Sprintf("pc: %d", pc),
-								Kind:  parameter,
-							})
-						}
+				for _, inlay := range logic.SourceInlaysForTools(res.sourceAnalysis()) {
+					if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.SourceLines, inlay, req.Params.Range) {
+						ihs = append(ihs, sourceInlayToLSP(res.SourceLines, inlay))
 					}
 				}
 			}
@@ -2072,6 +1975,74 @@ func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.Source
 	}
 }
 
+func sourceCodeLensEnabled(config tealConfig, lens logic.SourceCodeLens) bool {
+	switch lens.Kind {
+	case logic.SourceCodeLensReferenceCount:
+		return config.LensRefs
+	case logic.SourceCodeLensProgramCounter:
+		return config.PcLens
+	default:
+		return false
+	}
+}
+
+func sourceCodeLensToLSP(lines []logic.SourceLine, lens logic.SourceCodeLens) LspCodeLens {
+	title := ""
+	switch lens.Kind {
+	case logic.SourceCodeLensReferenceCount:
+		title = fmt.Sprintf("refs: %d", lens.ReferenceCount)
+	case logic.SourceCodeLensProgramCounter:
+		title = fmt.Sprintf("pc: %d", lens.ProgramCounter)
+	default:
+	}
+	return LspCodeLens{
+		Range: sourceRangeToLSP(lines, lens.Range),
+		Command: &LspCommand{
+			Title: title,
+		},
+	}
+}
+
+func sourceInlayEnabled(config tealConfig, inlay logic.SourceInlay) bool {
+	switch inlay.Kind {
+	case logic.SourceInlayNamedValue:
+		return config.InlayNamed
+	case logic.SourceInlayDecodedValue:
+		return config.InlayDecoded
+	case logic.SourceInlayProgramCounter:
+		return config.PcInlay
+	default:
+		return false
+	}
+}
+
+func sourceInlayInRange(lines []logic.SourceLine, inlay logic.SourceInlay, rg LspRange) bool {
+	return Overlaps(sourceRangeToLSP(lines, inlay.Range), rg)
+}
+
+func sourceInlayToLSP(lines []logic.SourceLine, inlay logic.SourceInlay) LspInlayHint {
+	parameter := new(int)
+	*parameter = 2
+	padding := new(bool)
+	*padding = true
+
+	label := inlay.Label
+	if inlay.Kind == logic.SourceInlayProgramCounter {
+		label = fmt.Sprintf("pc: %d", inlay.ProgramCounter)
+	}
+
+	hint := LspInlayHint{
+		Position:    sourcePositionToLSP(lines, inlay.Position),
+		Label:       label,
+		Kind:        parameter,
+		PaddingLeft: padding,
+	}
+	if inlay.Kind == logic.SourceInlayProgramCounter {
+		hint.PaddingLeft = nil
+	}
+	return hint
+}
+
 func sourceCompletionsToLSP(items []logic.SourceCompletionItem) []lspCompletionItem {
 	completions := make([]lspCompletionItem, 0, len(items))
 	for _, item := range items {
@@ -2276,6 +2247,13 @@ func sourceRangeToLSP(lines []logic.SourceLine, rg logic.SourceRange) LspRange {
 			Line:      rg.EndLine,
 			Character: sourceEditUTF16Column(lines, rg.EndLine, rg.EndColumn),
 		},
+	}
+}
+
+func sourcePositionToLSP(lines []logic.SourceLine, pos logic.SourcePosition) LspPosition {
+	return LspPosition{
+		Line:      pos.Line,
+		Character: sourceEditUTF16Column(lines, pos.Line, pos.Column),
 	}
 }
 

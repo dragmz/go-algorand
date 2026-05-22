@@ -38,46 +38,6 @@ func (r ProcessResult) sourceColumn(line int, character int) int {
 	return byteColumnFromUTF16Column(r.SourceLines[line].Text, character)
 }
 
-func tokenFromSourceToken(line string, sourceToken logic.SourceToken) Token {
-	return Token{
-		v: sourceToken.Text,
-		l: sourceToken.Line,
-		b: utf16ColumnFromByte(line, sourceToken.Column),
-		e: utf16ColumnFromByte(line, sourceToken.EndColumn),
-		t: tokenTypeFromSourceToken(sourceToken.Kind),
-	}
-}
-
-func tokenTypeFromSourceToken(kind logic.SourceTokenKind) TokenType {
-	switch kind {
-	case logic.SourceTokenSemicolon:
-		return TokenSemicolon
-	case logic.SourceTokenComment:
-		return TokenComment
-	default:
-		return TokenValue
-	}
-}
-
-func tokenFromSourceTokenInLines(lines []logic.SourceLine, sourceToken logic.SourceToken) (Token, bool) {
-	if sourceToken.Line < 0 || sourceToken.Line >= len(lines) {
-		return Token{}, false
-	}
-	return tokenFromSourceToken(lines[sourceToken.Line].Text, sourceToken), true
-}
-
-func tokenFromSourceRequiredVersion(lines []logic.SourceLine, required logic.SourceRequiredVersion) (Token, bool) {
-	if required.Line < 0 || required.Line >= len(lines) {
-		return Token{}, false
-	}
-	return Token{
-		l: required.Line,
-		b: utf16ColumnFromByte(lines[required.Line].Text, required.Column),
-		e: utf16ColumnFromByte(lines[required.Line].Text, required.EndColumn),
-		t: TokenValue,
-	}, true
-}
-
 func utf16ColumnFromByte(line string, column int) int {
 	if column < 0 {
 		column = 0

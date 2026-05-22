@@ -80,3 +80,51 @@ func TestSourceDiagnosticToLSP(t *testing.T) {
 		End:   LspPosition{Line: 0, Character: 6},
 	}, diag.Range)
 }
+
+func TestSourceInlayToLSP(t *testing.T) {
+	lines := logic.SourceLinesForTools("int 😀")
+	hint := sourceInlayToLSP(lines, logic.SourceInlay{
+		Kind:     logic.SourceInlayNamedValue,
+		Position: logic.SourcePosition{Line: 0, Column: len("int 😀")},
+		Label:    "value",
+	})
+
+	assert.Equal(t, LspPosition{Line: 0, Character: 6}, hint.Position)
+	assert.Equal(t, "value", hint.Label)
+	assert.NotNil(t, hint.PaddingLeft)
+	assert.True(t, *hint.PaddingLeft)
+}
+
+func TestSourceInlayRangeFiltering(t *testing.T) {
+	lines := logic.SourceLinesForTools("int 1\nint 2")
+	inlay := logic.SourceInlay{
+		Kind: logic.SourceInlayNamedValue,
+		Range: logic.SourceRange{
+			Line:      1,
+			Column:    len("int "),
+			EndLine:   1,
+			EndColumn: len("int 2"),
+		},
+	}
+
+	assert.False(t, sourceInlayInRange(lines, inlay, LspRange{
+		Start: LspPosition{Line: 0, Character: 0},
+		End:   LspPosition{Line: 0, Character: len("int 1")},
+	}))
+	assert.True(t, sourceInlayInRange(lines, inlay, LspRange{
+		Start: LspPosition{Line: 1, Character: 0},
+		End:   LspPosition{Line: 1, Character: len("int 2")},
+	}))
+}
+
+func TestSourceAnnotationConfigFiltering(t *testing.T) {
+	config := tealConfig{
+		LensRefs:     true,
+		InlayDecoded: true,
+	}
+
+	assert.True(t, sourceCodeLensEnabled(config, logic.SourceCodeLens{Kind: logic.SourceCodeLensReferenceCount}))
+	assert.False(t, sourceCodeLensEnabled(config, logic.SourceCodeLens{Kind: logic.SourceCodeLensProgramCounter}))
+	assert.True(t, sourceInlayEnabled(config, logic.SourceInlay{Kind: logic.SourceInlayDecodedValue}))
+	assert.False(t, sourceInlayEnabled(config, logic.SourceInlay{Kind: logic.SourceInlayNamedValue}))
+}
