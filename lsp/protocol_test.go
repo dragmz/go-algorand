@@ -443,16 +443,18 @@ func TestProtocolExamplesSmoke(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func runProtocol(t *testing.T, messages ...map[string]any) []protocolMessage {
+func runProtocol(t testing.TB, messages ...map[string]any) []protocolMessage {
 	t.Helper()
 
-	var input bytes.Buffer
-	for _, msg := range messages {
-		input.Write(protocolFrame(t, msg))
-	}
+	return runProtocolInput(t, protocolFrames(t, messages...))
+}
 
+func runProtocolInput(t testing.TB, inputData []byte) []protocolMessage {
+	t.Helper()
+
+	input := bytes.NewBuffer(inputData)
 	var output bytes.Buffer
-	server, err := New(&input, &output)
+	server, err := New(input, &output)
 	require.NoError(t, err)
 
 	code, err := server.Run()
@@ -462,7 +464,17 @@ func runProtocol(t *testing.T, messages ...map[string]any) []protocolMessage {
 	return protocolReadFrames(t, output.Bytes())
 }
 
-func protocolFrame(t *testing.T, msg map[string]any) []byte {
+func protocolFrames(t testing.TB, messages ...map[string]any) []byte {
+	t.Helper()
+
+	var input bytes.Buffer
+	for _, msg := range messages {
+		input.Write(protocolFrame(t, msg))
+	}
+	return input.Bytes()
+}
+
+func protocolFrame(t testing.TB, msg map[string]any) []byte {
 	t.Helper()
 
 	body, err := json.Marshal(msg)
@@ -471,7 +483,7 @@ func protocolFrame(t *testing.T, msg map[string]any) []byte {
 	return []byte(fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(body), body))
 }
 
-func protocolReadFrames(t *testing.T, data []byte) []protocolMessage {
+func protocolReadFrames(t testing.TB, data []byte) []protocolMessage {
 	t.Helper()
 
 	reader := textproto.NewReader(bufio.NewReader(bytes.NewReader(data)))
@@ -562,7 +574,7 @@ func protocolRange(startLine int, startCharacter int, endLine int, endCharacter 
 	}
 }
 
-func protocolResponseByID(t *testing.T, messages []protocolMessage, id string) protocolMessage {
+func protocolResponseByID(t testing.TB, messages []protocolMessage, id string) protocolMessage {
 	t.Helper()
 
 	for _, msg := range messages {
@@ -584,7 +596,7 @@ func protocolRequestsByMethod(messages []protocolMessage, method string) []proto
 	return requests
 }
 
-func protocolMessageID(t *testing.T, msg protocolMessage) string {
+func protocolMessageID(t testing.TB, msg protocolMessage) string {
 	t.Helper()
 
 	var id string
@@ -592,7 +604,7 @@ func protocolMessageID(t *testing.T, msg protocolMessage) string {
 	return id
 }
 
-func protocolResultAs[T any](t *testing.T, msg protocolMessage) T {
+func protocolResultAs[T any](t testing.TB, msg protocolMessage) T {
 	t.Helper()
 
 	require.Nil(t, msg.Error)
@@ -603,14 +615,14 @@ func protocolResultAs[T any](t *testing.T, msg protocolMessage) T {
 	return result
 }
 
-func protocolAssertSuccess(t *testing.T, msg protocolMessage) {
+func protocolAssertSuccess(t testing.TB, msg protocolMessage) {
 	t.Helper()
 
 	require.Nil(t, msg.Error)
 	assert.NotEmpty(t, msg.ID)
 }
 
-func protocolAssertNoResponseErrors(t *testing.T, messages []protocolMessage) {
+func protocolAssertNoResponseErrors(t testing.TB, messages []protocolMessage) {
 	t.Helper()
 
 	for _, msg := range messages {
