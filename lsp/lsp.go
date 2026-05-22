@@ -251,23 +251,21 @@ type lspSignatureHelp struct {
 }
 
 type lspServerCapabilities struct {
-	TextDocumentSync           *int                       `json:"textDocumentSync,omitempty"`
-	DiagnosticProvider         *lspDiagnosticProvider     `json:"diagnosticProvider,omitempty"`
-	CompletionProvider         *lspCompletionProvider     `json:"completionProvider,omitempty"`
-	DocumentSymbolProvider     *bool                      `json:"documentSymbolProvider,omitempty"`
-	CodeActionProvider         *bool                      `json:"codeActionProvider,omitempty"`
-	ExecuteCommandProvider     *lspExecuteCommandProvider `json:"executeCommandProvider,omitempty"`
-	RenameProvider             *lspRenameOptions          `json:"renameProvider,omitempty"`
-	ColorProvider              *bool                      `json:"colorProvider,omitempty"`
-	DocumentHighlightProvider  *bool                      `json:"documentHighlightProvider,omitempty"`
-	SemanticTokensProvider     *lspSemanticTokensProvider `json:"semanticTokensProvider,omitempty"`
-	DocumentFormattingProvider *bool                      `json:"documentFormattingProvider,omitempty"`
-	DefinitionProvider         *bool                      `json:"definitionProvider,omitempty"`
-	HoverProvider              *bool                      `json:"hoverProvider,omitempty"`
-	SignatureHelpProvider      *lspSignatureHelpOptions   `json:"signatureHelpProvider,omitempty"`
-	InlayHintProvider          *bool                      `json:"inlayHintProvider,omitempty"`
-	InlineValueProvider        *bool                      `json:"inlineValueProvider,omitempty"`
-	CodeLensProvider           *lspCodeLensProvider       `json:"codeLensProvider,omitempty"`
+	TextDocumentSync          *int                       `json:"textDocumentSync,omitempty"`
+	DiagnosticProvider        *lspDiagnosticProvider     `json:"diagnosticProvider,omitempty"`
+	CompletionProvider        *lspCompletionProvider     `json:"completionProvider,omitempty"`
+	DocumentSymbolProvider    *bool                      `json:"documentSymbolProvider,omitempty"`
+	CodeActionProvider        *bool                      `json:"codeActionProvider,omitempty"`
+	ExecuteCommandProvider    *lspExecuteCommandProvider `json:"executeCommandProvider,omitempty"`
+	RenameProvider            *lspRenameOptions          `json:"renameProvider,omitempty"`
+	ColorProvider             *bool                      `json:"colorProvider,omitempty"`
+	DocumentHighlightProvider *bool                      `json:"documentHighlightProvider,omitempty"`
+	SemanticTokensProvider    *lspSemanticTokensProvider `json:"semanticTokensProvider,omitempty"`
+	DefinitionProvider        *bool                      `json:"definitionProvider,omitempty"`
+	HoverProvider             *bool                      `json:"hoverProvider,omitempty"`
+	SignatureHelpProvider     *lspSignatureHelpOptions   `json:"signatureHelpProvider,omitempty"`
+	InlayHintProvider         *bool                      `json:"inlayHintProvider,omitempty"`
+	CodeLensProvider          *lspCodeLensProvider       `json:"codeLensProvider,omitempty"`
 }
 
 type lspInitializeResult struct {
@@ -720,10 +718,6 @@ type lspCompletionRequestParams struct {
 	Position     LspPosition               `json:"position"`
 }
 
-type lspDocumentFormattingRequestParams struct {
-	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
-}
-
 type lspDefinitionRequestParams struct {
 	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
 	Position     LspPosition               `json:"position"`
@@ -767,16 +761,6 @@ type LspInlayHint struct {
 	PaddingLeft *bool       `json:"paddingLeft,omitempty"`
 }
 
-type lspInlineValueRequestParams struct {
-	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
-	Range        LspRange                  `json:"range,omitempty"`
-}
-
-type lspInlineValueText struct {
-	Range LspRange `json:"range"`
-	Text  string   `json:"text"`
-}
-
 type lspCodeLensRequestParams struct {
 	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
 }
@@ -804,12 +788,10 @@ type lspDidCloseRequest lspRequest[*lspDidCloseRequestParams]
 type lspDocumentHighlightRequest lspRequest[*lspDocumentHighlightRequestParams]
 type lspSemanticTokensFullRequest lspRequest[*lspSemanticTokensFullRequestParams]
 type lspCompletionRequest lspRequest[*lspCompletionRequestParams]
-type lspDocumentFormattingRequest lspRequest[*lspDocumentFormattingRequestParams]
 type lspDefinitionRequest lspRequest[*lspDefinitionRequestParams]
 type lspHoverRequest lspRequest[*lspHoverRequestParams]
 type lspSignatureHelpRequest lspRequest[*lspSignatureHelpRequestParams]
 type lspInlayHintRequest lspRequest[*lspInlayHintRequestParams]
-type lspInlineValueRequest lspRequest[*lspInlineValueRequestParams]
 type lspInitializeRequest lspRequest[*lspInitializeRequestParams]
 type lspCodeLensRequest lspRequest[*lspCodeLensRequestParams]
 
@@ -1476,20 +1458,6 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 				},
 			})
 
-		case "textDocument/inlineValue":
-			req, err := read[lspInlineValueRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			ls := []lspInlineValueText{}
-			l.prepare(req.Params.TextDocument.Uri)
-
-			return l.success(h.Id, ls)
-
 		case "textDocument/codeLens":
 			req, err := read[lspCodeLensRequest](b)
 			if err != nil {
@@ -1607,26 +1575,6 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			return l.success(h.Id, ls)
-
-		case "textDocument/formatting":
-			req, err := read[lspDocumentFormattingRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			var te []lspTextEdit
-
-			doc, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				// TODO: implement formatting
-				formatted := doc.s
-				te = []lspTextEdit{prepareReplaceAllTextEdit(len(res.Lines), formatted)}
-			}
-
-			return l.success(h.Id, te)
 
 		case "textDocument/signatureHelp":
 			req, err := read[lspSignatureHelpRequest](b)
@@ -1837,9 +1785,6 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			fullSemantic := new(bool)
 			*fullSemantic = true
 
-			formatting := new(bool)
-			*formatting = true
-
 			hover := new(bool)
 			*hover = true
 
@@ -1847,9 +1792,6 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			if l.config.InlayNamed || l.config.InlayDecoded {
 				*inlayHint = true
 			}
-
-			inlineValue := new(bool)
-			*inlineValue = true
 
 			var semanticTokensProvider *lspSemanticTokensProvider
 
@@ -1888,13 +1830,11 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 					CompletionProvider: &lspCompletionProvider{
 						TriggerCharacters: []string{" "},
 					},
-					DocumentFormattingProvider: formatting,
-					DefinitionProvider:         definition,
-					HoverProvider:              hover,
-					SignatureHelpProvider:      &lspSignatureHelpOptions{},
-					InlayHintProvider:          inlayHint,
-					InlineValueProvider:        inlineValue,
-					CodeLensProvider:           &lspCodeLensProvider{},
+					DefinitionProvider:    definition,
+					HoverProvider:         hover,
+					SignatureHelpProvider: &lspSignatureHelpOptions{},
+					InlayHintProvider:     inlayHint,
+					CodeLensProvider:      &lspCodeLensProvider{},
 				},
 			})
 		default:
@@ -1903,22 +1843,6 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 	}
 
 	return nil
-}
-
-func prepareReplaceAllTextEdit(lines int, formatted string) lspTextEdit {
-	return lspTextEdit{
-		Range: LspRange{
-			Start: LspPosition{
-				Line:      0,
-				Character: 0,
-			},
-			End: LspPosition{
-				Line:      lines,
-				Character: 0,
-			},
-		},
-		NewText: formatted,
-	}
 }
 
 func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.SourceAction) lspCodeAction {

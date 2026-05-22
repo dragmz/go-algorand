@@ -133,11 +133,3 @@ func TestSourceMapForTools(t *testing.T) {
 	_, ok = SourceMapForTools(SourceAnalysisResult{}, []string{"test.teal"})
 	require.False(t, ok)
 }
-
-func TestSourceModeForTools(t *testing.T) {
-	partitiontest.PartitionTest(t)
-	t.Parallel()
-
-	require.Equal(t, ModeApp, SourceModeForTools(SourceLinesForTools("")))
-	require.Equal(t, ModeSig, SourceModeForTools(SourceLinesForTools("// #pragma mode logicsig")))
-}

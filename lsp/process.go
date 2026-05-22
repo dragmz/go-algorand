@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"github.com/algorand/go-algorand/data/transactions/logic"
@@ -44,9 +45,18 @@ func byteColumnFromUTF16Column(line string, character int) int {
 	return len(line)
 }
 
+func sourceModeForLSP(lines []logic.SourceLine) logic.RunMode {
+	for _, line := range lines {
+		if line.Comment != nil && strings.TrimSpace(line.Comment.Text) == "#pragma mode logicsig" {
+			return logic.ModeSig
+		}
+	}
+	return logic.ModeApp
+}
+
 func Process(source string) *logic.SourceAnalysisResult {
 	initialLines := logic.SourceLinesForTools(source)
-	mode := logic.SourceModeForTools(initialLines)
+	mode := sourceModeForLSP(initialLines)
 	analysis := logic.AnalyzeSourceForToolsWithOptions(source, logic.SourceToolOptions{
 		Mode: mode,
 	})
