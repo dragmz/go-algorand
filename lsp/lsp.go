@@ -1911,44 +1911,8 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			st := SemanticTokens{}
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, class := range res.SourceProgram.TokenClasses {
-					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, class.Token)
-					if !ok {
-						continue
-					}
-					switch class.Kind {
-					case logic.SourceTokenClassOpcode:
-						st = append(st, prepareOpSemToken(tok))
-					case logic.SourceTokenClassMacro:
-						st = append(st, prepareMacroSemToken(tok))
-					case logic.SourceTokenClassBool:
-						st = append(st, prepareValueSemToken(tok))
-					case logic.SourceTokenClassNumber:
-						st = append(st, prepareNumberSemToken(tok))
-					case logic.SourceTokenClassString:
-						st = append(st, prepareStringSemToken(tok))
-					case logic.SourceTokenClassKeyword:
-						st = append(st, prepareKeywordSemToken(tok))
-					default:
-					}
-				}
-
-				for _, line := range res.SourceLines {
-					if line.Comment == nil {
-						continue
-					}
-					tok, ok := tokenFromSourceTokenInLines(res.SourceLines, *line.Comment)
-					if ok {
-						st = append(st, prepareCommentSemToken(tok))
-					}
-				}
-
-				for _, s := range res.SourceIndex.Symbols {
-					st = append(st, sourceSymbolSemToken(res.SourceLines, s))
-				}
-
-				for _, s := range res.SourceIndex.References {
-					st = append(st, sourceReferenceSemToken(res.SourceLines, s))
+				for _, token := range logic.SourceSemanticTokensForTools(res.sourceAnalysis()) {
+					st = append(st, sourceSemanticTokenToLSP(res.SourceLines, token))
 				}
 			}
 
@@ -2327,95 +2291,37 @@ func sourceReferenceRangeToLSP(lines []logic.SourceLine, ref logic.SourceReferen
 	return sourceRangeToLSP(lines, logic.SourceReferenceRangeForTools(ref))
 }
 
-func sourceReferenceSemToken(lines []logic.SourceLine, ref logic.SourceReference) SemanticToken {
-	rg := sourceReferenceRangeToLSP(lines, ref)
+func sourceSemanticTokenToLSP(lines []logic.SourceLine, token logic.SourceSemanticToken) SemanticToken {
+	rg := sourceRangeToLSP(lines, token.Range)
 	return SemanticToken{
 		Line:      rg.Start.Line,
 		Index:     rg.Start.Character,
 		Length:    rg.End.Character - rg.Start.Character,
-		Type:      semanticTokenString,
+		Type:      sourceSemanticTokenTypeToLSP(token.Kind),
 		Modifiers: 0,
 	}
 }
 
-func sourceSymbolSemToken(lines []logic.SourceLine, symbol logic.SourceSymbol) SemanticToken {
-	rg := sourceSymbolRangeToLSP(lines, symbol)
-	return SemanticToken{
-		Line:      rg.Start.Line,
-		Index:     rg.Start.Character,
-		Length:    rg.End.Character - rg.Start.Character,
-		Type:      semanticTokenMethod,
-		Modifiers: 0,
-	}
-}
-
-func prepareCommentSemToken(t Token) SemanticToken {
-	return SemanticToken{
-		Line:      t.Line(),
-		Index:     t.Begin(),
-		Length:    t.End() - t.Begin(),
-		Type:      semanticTokenComment,
-		Modifiers: 0,
-	}
-}
-
-func prepareKeywordSemToken(v Token) SemanticToken {
-	return SemanticToken{
-		Line:      v.Line(),
-		Index:     v.Begin(),
-		Length:    v.End() - v.Begin(),
-		Type:      semanticTokenKeyword,
-		Modifiers: 0,
-	}
-}
-
-func prepareStringSemToken(v Token) SemanticToken {
-	return SemanticToken{
-		Line:      v.Line(),
-		Index:     v.Begin(),
-		Length:    v.End() - v.Begin(),
-		Type:      semanticTokenString,
-		Modifiers: 0,
-	}
-}
-
-func prepareNumberSemToken(v Token) SemanticToken {
-	return SemanticToken{
-		Line:      v.Line(),
-		Index:     v.Begin(),
-		Length:    v.End() - v.Begin(),
-		Type:      semanticTokenNumber,
-		Modifiers: 0,
-	}
-}
-
-func prepareOpSemToken(op Token) SemanticToken {
-	return SemanticToken{
-		Line:      op.Line(),
-		Index:     op.Begin(),
-		Length:    op.End() - op.Begin(),
-		Type:      semanticTokenKeyword,
-		Modifiers: 0,
-	}
-}
-
-func prepareMacroSemToken(m Token) SemanticToken {
-	return SemanticToken{
-		Line:      m.Line(),
-		Index:     m.Begin(),
-		Length:    m.End() - m.Begin(),
-		Type:      semanticTokenMacro,
-		Modifiers: 0,
-	}
-}
-
-func prepareValueSemToken(v Token) SemanticToken {
-	return SemanticToken{
-		Line:      v.Line(),
-		Index:     v.Begin(),
-		Length:    v.End() - v.Begin(),
-		Type:      semanticTokenValue,
-		Modifiers: 0,
+func sourceSemanticTokenTypeToLSP(kind logic.SourceSemanticTokenKind) int {
+	switch kind {
+	case logic.SourceSemanticMacro:
+		return semanticTokenMacro
+	case logic.SourceSemanticBool:
+		return semanticTokenValue
+	case logic.SourceSemanticNumber:
+		return semanticTokenNumber
+	case logic.SourceSemanticString:
+		return semanticTokenString
+	case logic.SourceSemanticKeyword:
+		return semanticTokenKeyword
+	case logic.SourceSemanticComment:
+		return semanticTokenComment
+	case logic.SourceSemanticSymbol:
+		return semanticTokenMethod
+	case logic.SourceSemanticReference:
+		return semanticTokenString
+	default:
+		return semanticTokenKeyword
 	}
 }
 

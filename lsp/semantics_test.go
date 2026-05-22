@@ -1,6 +1,10 @@
 package lsp
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/algorand/go-algorand/data/transactions/logic"
+)
 
 func TestSemantics(t *testing.T) {
 	ts := SemanticTokens{
@@ -15,5 +19,25 @@ func TestSemantics(t *testing.T) {
 
 	if len(res) != len(ts)*5 {
 		t.Error("Unexpected length:", len(ts))
+	}
+}
+
+func TestSourceSemanticTokenTypeToLSP(t *testing.T) {
+	tests := map[logic.SourceSemanticTokenKind]int{
+		logic.SourceSemanticOpcode:    semanticTokenKeyword,
+		logic.SourceSemanticMacro:     semanticTokenMacro,
+		logic.SourceSemanticBool:      semanticTokenValue,
+		logic.SourceSemanticNumber:    semanticTokenNumber,
+		logic.SourceSemanticString:    semanticTokenString,
+		logic.SourceSemanticKeyword:   semanticTokenKeyword,
+		logic.SourceSemanticComment:   semanticTokenComment,
+		logic.SourceSemanticSymbol:    semanticTokenMethod,
+		logic.SourceSemanticReference: semanticTokenString,
+	}
+
+	for kind, expected := range tests {
+		if got := sourceSemanticTokenTypeToLSP(kind); got != expected {
+			t.Errorf("kind %d mapped to %d, expected %d", kind, got, expected)
+		}
 	}
 }
