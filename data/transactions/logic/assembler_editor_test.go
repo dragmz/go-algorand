@@ -46,8 +46,8 @@ func TestSourceCompletionsForToolsOpcodeVersionModeAndPrefix(t *testing.T) {
 	filteredNames := sourceCompletionLabelsForTest(filteredItems)
 	require.Contains(t, filteredNames, "txn")
 	require.NotContains(t, filteredNames, "int")
-	require.Contains(t, filteredNames, "soc")
-	require.Contains(t, filteredNames, "func")
+	require.NotContains(t, filteredNames, "soc")
+	require.NotContains(t, filteredNames, "func")
 }
 
 func TestSourceCompletionsForToolsDefinesAndArguments(t *testing.T) {

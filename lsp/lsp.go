@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/textproto"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -1398,7 +1399,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			}
 
 			column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-			rename, ok := logic.SourcePrepareRenameForTools(*res, req.Params.Position.Line, column)
+			rename, ok := sourcePrepareRename(*res, req.Params.Position.Line, column)
 			if ok {
 				err = l.reportProgressEnd(req.Params.WorkDoneToken, "Symbol ready for rename")
 				if err != nil {
@@ -1444,7 +1445,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			chs := []lspTextEdit{}
 
 			column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-			chs = append(chs, sourceEditsToLSP(res.Lines, logic.SourceRenameEditsForTools(*res, req.Params.Position.Line, column, req.Params.NewName))...)
+			chs = append(chs, sourceEditsToLSP(res.Lines, sourceRenameEdits(*res, req.Params.Position.Line, column, req.Params.NewName))...)
 
 			message := fmt.Sprintf("Renamed %d locations", len(chs))
 			err = l.reportProgressEnd(req.Params.WorkDoneToken, message)
@@ -1471,7 +1472,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, lens := range logic.SourceCodeLensesForTools(*res) {
+				for _, lens := range sourceCodeLenses(*res) {
 					if sourceCodeLensEnabled(l.config, lens) {
 						cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
 					}
@@ -1493,7 +1494,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, inlay := range logic.SourceInlaysForTools(*res) {
+				for _, inlay := range sourceInlays(*res) {
 					if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.Lines, inlay, req.Params.Range) {
 						ihs = append(ihs, sourceInlayToLSP(res.Lines, inlay))
 					}
@@ -1514,7 +1515,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
 				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				ccs = sourceCompletionsToLSP(logic.SourceCompletionsForTools(*res, req.Params.Position.Line, column))
+				ccs = sourceCompletionsAtToLSP(*res, req.Params.Position.Line, column)
 			}
 
 			if len(ccs) == 0 {
@@ -1566,7 +1567,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
 				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				for _, rg := range logic.SourceDefinitionsForTools(*res, req.Params.Position.Line, column) {
+				for _, rg := range sourceDefinitions(*res, req.Params.Position.Line, column) {
 					ls = append(ls, lspLocation{
 						Uri:   req.Params.TextDocument.Uri,
 						Range: sourceRangeToLSP(res.Lines, rg),
@@ -1658,9 +1659,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, diagnostic := range logic.SourceDiagnosticsForTools(*res, logic.SourceDiagnosticOptions{ProgramSize: l.config.ProgramSize}) {
-					ds = append(ds, sourceDiagnosticToLSP(res.Lines, diagnostic))
-				}
+				ds = sourceDiagnosticsToLSP(*res, l.config.ProgramSize)
 			}
 
 			return l.success(h.Id, lspFullDocumentDiagnosticReport{
@@ -1682,7 +1681,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
 				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				for _, highlight := range logic.SourceHighlightsForTools(*res, req.Params.Position.Line, column) {
+				for _, highlight := range sourceHighlights(*res, req.Params.Position.Line, column) {
 					hs = append(hs, sourceHighlightToLSP(res.Lines, highlight))
 				}
 			}
@@ -1700,7 +1699,7 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 			syms := []LspDocumentSymbol{}
 			_, res, err := l.prepare(req.Params.TextDocument.Uri)
 			if err == nil {
-				for _, symbol := range logic.SourceDocumentSymbolsForTools(*res) {
+				for _, symbol := range sourceDocumentSymbols(*res) {
 					syms = append(syms, sourceDocumentSymbolToLSP(res.Lines, symbol))
 				}
 			}
@@ -1845,6 +1844,217 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 	return nil
 }
 
+type sourceCodeLensKind int
+
+const (
+	sourceCodeLensReferenceCount sourceCodeLensKind = iota
+	sourceCodeLensProgramCounter
+)
+
+type sourceCodeLens struct {
+	Kind           sourceCodeLensKind
+	Range          logic.SourceRange
+	ReferenceCount int
+	ProgramCounter int
+}
+
+type sourceInlayKind int
+
+const (
+	sourceInlayNamedValue sourceInlayKind = iota
+	sourceInlayDecodedValue
+	sourceInlayProgramCounter
+)
+
+type sourceInlay struct {
+	Kind           sourceInlayKind
+	Position       logic.SourcePosition
+	Range          logic.SourceRange
+	Label          string
+	ProgramCounter int
+}
+
+type sourcePrepareRenameResult struct {
+	Range       logic.SourceRange
+	Placeholder string
+}
+
+type sourceHighlight struct {
+	Range logic.SourceRange
+}
+
+type sourceDocumentSymbol struct {
+	Name           string
+	Range          logic.SourceRange
+	SelectionRange logic.SourceRange
+}
+
+func sourcePrepareRename(result logic.SourceAnalysisResult, line int, column int) (sourcePrepareRenameResult, bool) {
+	identifier, ok := logic.SourceIdentifierAtForTools(result.Index, line, column)
+	if !ok {
+		return sourcePrepareRenameResult{}, false
+	}
+	if identifier.Symbol != nil {
+		return sourcePrepareRenameResult{
+			Range:       logic.SourceSymbolNameRangeForTools(*identifier.Symbol),
+			Placeholder: identifier.Name,
+		}, true
+	}
+	if identifier.Reference != nil {
+		return sourcePrepareRenameResult{
+			Range:       logic.SourceReferenceRangeForTools(*identifier.Reference),
+			Placeholder: identifier.Name,
+		}, true
+	}
+	return sourcePrepareRenameResult{}, false
+}
+
+func sourceRenameEdits(result logic.SourceAnalysisResult, line int, column int, newName string) []logic.SourceEdit {
+	identifier, ok := logic.SourceIdentifierAtForTools(result.Index, line, column)
+	if !ok {
+		return nil
+	}
+	return logic.SourceEditsRenameSymbolForTools(result.Index, identifier.Name, newName)
+}
+
+func sourceDefinitions(result logic.SourceAnalysisResult, line int, column int) []logic.SourceRange {
+	ref, ok := logic.SourceReferenceAtForTools(result.Index, line, column)
+	if !ok {
+		return nil
+	}
+	var ranges []logic.SourceRange
+	for _, symbol := range logic.SourceSymbolsByNameForTools(result.Index, ref.Name) {
+		ranges = append(ranges, logic.SourceSymbolNameRangeForTools(symbol))
+	}
+	return ranges
+}
+
+func sourceHighlights(result logic.SourceAnalysisResult, line int, column int) []sourceHighlight {
+	identifier, ok := logic.SourceIdentifierAtForTools(result.Index, line, column)
+	if !ok {
+		return nil
+	}
+	var highlights []sourceHighlight
+	for _, symbol := range logic.SourceSymbolsByNameForTools(result.Index, identifier.Name) {
+		highlights = append(highlights, sourceHighlight{Range: logic.SourceSymbolNameRangeForTools(symbol)})
+	}
+	for _, ref := range logic.SourceReferencesByNameForTools(result.Index, identifier.Name) {
+		highlights = append(highlights, sourceHighlight{Range: logic.SourceReferenceRangeForTools(ref)})
+	}
+	return highlights
+}
+
+func sourceDocumentSymbols(result logic.SourceAnalysisResult) []sourceDocumentSymbol {
+	symbols := make([]sourceDocumentSymbol, 0, len(result.Index.Symbols))
+	for _, symbol := range result.Index.Symbols {
+		symbols = append(symbols, sourceDocumentSymbol{
+			Name:           symbol.Name,
+			Range:          logic.SourceSymbolRangeForTools(symbol),
+			SelectionRange: logic.SourceSymbolNameRangeForTools(symbol),
+		})
+	}
+	return symbols
+}
+
+func sourceCodeLenses(result logic.SourceAnalysisResult) []sourceCodeLens {
+	var lenses []sourceCodeLens
+
+	for _, symbol := range result.Index.Symbols {
+		count := result.Index.RefCounts[symbol.Name]
+		if count == 0 {
+			continue
+		}
+		lenses = append(lenses, sourceCodeLens{
+			Kind: sourceCodeLensReferenceCount,
+			Range: logic.SourceRange{
+				Line:    symbol.Line,
+				EndLine: symbol.Line,
+			},
+			ReferenceCount: count,
+		})
+	}
+
+	for _, pc := range sourceProgramCounters(result) {
+		loc := result.OpStream.OffsetToSource[pc]
+		lenses = append(lenses, sourceCodeLens{
+			Kind:           sourceCodeLensProgramCounter,
+			Range:          sourceRangeFromLocation(loc),
+			ProgramCounter: pc,
+		})
+	}
+
+	return lenses
+}
+
+func sourceInlays(result logic.SourceAnalysisResult) []sourceInlay {
+	var inlays []sourceInlay
+
+	for _, hint := range logic.SourceInlayHintsForTools(result.Lines, result.Program) {
+		inlay := sourceInlay{
+			Position: logic.SourcePosition{
+				Line:   hint.Token.Line,
+				Column: hint.Token.EndColumn,
+			},
+			Range: sourceRangeFromToken(hint.Token),
+			Label: hint.Label,
+		}
+		switch hint.Kind {
+		case logic.SourceInlayHintNamed:
+			inlay.Kind = sourceInlayNamedValue
+		case logic.SourceInlayHintDecoded:
+			inlay.Kind = sourceInlayDecodedValue
+		default:
+			continue
+		}
+		inlays = append(inlays, inlay)
+	}
+
+	for _, pc := range sourceProgramCounters(result) {
+		loc := result.OpStream.OffsetToSource[pc]
+		inlays = append(inlays, sourceInlay{
+			Kind: sourceInlayProgramCounter,
+			Position: logic.SourcePosition{
+				Line:   loc.Line,
+				Column: loc.Column,
+			},
+			Range:          sourceRangeFromLocation(loc),
+			ProgramCounter: pc,
+		})
+	}
+
+	return inlays
+}
+
+func sourceProgramCounters(result logic.SourceAnalysisResult) []int {
+	if result.OpStream == nil || result.OpStream.OffsetToSource == nil {
+		return nil
+	}
+	pcs := make([]int, 0, len(result.OpStream.OffsetToSource))
+	for pc := range result.OpStream.OffsetToSource {
+		pcs = append(pcs, pc)
+	}
+	sort.Ints(pcs)
+	return pcs
+}
+
+func sourceRangeFromLocation(loc logic.SourceLocation) logic.SourceRange {
+	return logic.SourceRange{
+		Line:      loc.Line,
+		Column:    loc.Column,
+		EndLine:   loc.Line,
+		EndColumn: loc.Column,
+	}
+}
+
+func sourceRangeFromToken(token logic.SourceToken) logic.SourceRange {
+	return logic.SourceRange{
+		Line:      token.Line,
+		Column:    token.Column,
+		EndLine:   token.Line,
+		EndColumn: token.EndColumn,
+	}
+}
+
 func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.SourceAction) lspCodeAction {
 	kind := "quickfix"
 	edit := workspaceEditFromSourceEdits(uri, lines, action.Edits)
@@ -1855,23 +2065,23 @@ func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.Source
 	}
 }
 
-func sourceCodeLensEnabled(config tealConfig, lens logic.SourceCodeLens) bool {
+func sourceCodeLensEnabled(config tealConfig, lens sourceCodeLens) bool {
 	switch lens.Kind {
-	case logic.SourceCodeLensReferenceCount:
+	case sourceCodeLensReferenceCount:
 		return config.LensRefs
-	case logic.SourceCodeLensProgramCounter:
+	case sourceCodeLensProgramCounter:
 		return config.PcLens
 	default:
 		return false
 	}
 }
 
-func sourceCodeLensToLSP(lines []logic.SourceLine, lens logic.SourceCodeLens) LspCodeLens {
+func sourceCodeLensToLSP(lines []logic.SourceLine, lens sourceCodeLens) LspCodeLens {
 	title := ""
 	switch lens.Kind {
-	case logic.SourceCodeLensReferenceCount:
+	case sourceCodeLensReferenceCount:
 		title = fmt.Sprintf("refs: %d", lens.ReferenceCount)
-	case logic.SourceCodeLensProgramCounter:
+	case sourceCodeLensProgramCounter:
 		title = fmt.Sprintf("pc: %d", lens.ProgramCounter)
 	default:
 	}
@@ -1883,31 +2093,31 @@ func sourceCodeLensToLSP(lines []logic.SourceLine, lens logic.SourceCodeLens) Ls
 	}
 }
 
-func sourceInlayEnabled(config tealConfig, inlay logic.SourceInlay) bool {
+func sourceInlayEnabled(config tealConfig, inlay sourceInlay) bool {
 	switch inlay.Kind {
-	case logic.SourceInlayNamedValue:
+	case sourceInlayNamedValue:
 		return config.InlayNamed
-	case logic.SourceInlayDecodedValue:
+	case sourceInlayDecodedValue:
 		return config.InlayDecoded
-	case logic.SourceInlayProgramCounter:
+	case sourceInlayProgramCounter:
 		return config.PcInlay
 	default:
 		return false
 	}
 }
 
-func sourceInlayInRange(lines []logic.SourceLine, inlay logic.SourceInlay, rg LspRange) bool {
+func sourceInlayInRange(lines []logic.SourceLine, inlay sourceInlay, rg LspRange) bool {
 	return Overlaps(sourceRangeToLSP(lines, inlay.Range), rg)
 }
 
-func sourceInlayToLSP(lines []logic.SourceLine, inlay logic.SourceInlay) LspInlayHint {
+func sourceInlayToLSP(lines []logic.SourceLine, inlay sourceInlay) LspInlayHint {
 	parameter := new(int)
 	*parameter = 2
 	padding := new(bool)
 	*padding = true
 
 	label := inlay.Label
-	if inlay.Kind == logic.SourceInlayProgramCounter {
+	if inlay.Kind == sourceInlayProgramCounter {
 		label = fmt.Sprintf("pc: %d", inlay.ProgramCounter)
 	}
 
@@ -1917,10 +2127,19 @@ func sourceInlayToLSP(lines []logic.SourceLine, inlay logic.SourceInlay) LspInla
 		Kind:        parameter,
 		PaddingLeft: padding,
 	}
-	if inlay.Kind == logic.SourceInlayProgramCounter {
+	if inlay.Kind == sourceInlayProgramCounter {
 		hint.PaddingLeft = nil
 	}
 	return hint
+}
+
+func sourceCompletionsAtToLSP(result logic.SourceAnalysisResult, line int, column int) []lspCompletionItem {
+	completions := sourceCompletionsToLSP(logic.SourceCompletionsForTools(result, line, column))
+	ctx := logic.SourceCompletionContextForTools(result.Lines, result.Program, line, column)
+	if ctx.Mode == logic.SourceCompletionOpcode {
+		completions = append(sourceSnippetCompletionsToLSP(), completions...)
+	}
+	return completions
 }
 
 func sourceCompletionsToLSP(items []logic.SourceCompletionItem) []lspCompletionItem {
@@ -1934,13 +2153,10 @@ func sourceCompletionsToLSP(items []logic.SourceCompletionItem) []lspCompletionI
 func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 	operator := new(int)
 	*operator = 25
-	snippet := 15
 	snippetFormat := new(int)
 	*snippetFormat = 2
 
 	switch item.Kind {
-	case logic.SourceCompletionItemSnippet:
-		return sourceSnippetCompletionToLSP(item, snippet, snippetFormat)
 	case logic.SourceCompletionItemDefine:
 		return lspCompletionItem{
 			Label:      item.Label,
@@ -1997,24 +2213,25 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 	}
 }
 
-func sourceSnippetCompletionToLSP(item logic.SourceCompletionItem, snippet int, snippetFormat *int) lspCompletionItem {
-	switch item.Snippet {
-	case logic.SourceCompletionSnippetOnCompletionSwitch:
-		return lspCompletionItem{
-			Label:            item.Label,
+func sourceSnippetCompletionsToLSP() []lspCompletionItem {
+	snippet := 15
+	snippetFormat := new(int)
+	*snippetFormat = 2
+	return []lspCompletionItem{
+		{
+			Label:            "soc",
 			Kind:             &snippet,
-			Detail:           item.Detail,
+			Detail:           "switch on OnCompletion",
 			InsertText:       sourceOnCompletionSwitchSnippet(),
 			InsertTextFormat: snippetFormat,
-		}
-	default:
-		return lspCompletionItem{
-			Label:            item.Label,
+		},
+		{
+			Label:            "func",
 			Kind:             &snippet,
-			Detail:           item.Detail,
+			Detail:           "create subroutine",
 			InsertText:       "${1:sub}:\r\n\r\n\tproto ${2:0} ${3:0}\r\n\t${4}\r\n\tretsub\r\n",
 			InsertTextFormat: snippetFormat,
-		}
+		},
 	}
 }
 
@@ -2171,7 +2388,7 @@ func sourceSemanticTokenTypeToLSP(kind logic.SourceSemanticTokenKind) int {
 	}
 }
 
-func sourceDocumentSymbolToLSP(lines []logic.SourceLine, symbol logic.SourceDocumentSymbol) LspDocumentSymbol {
+func sourceDocumentSymbolToLSP(lines []logic.SourceLine, symbol sourceDocumentSymbol) LspDocumentSymbol {
 	return LspDocumentSymbol{
 		Name:           symbol.Name,
 		Kind:           LspSymbolKindMethod,
@@ -2180,7 +2397,7 @@ func sourceDocumentSymbolToLSP(lines []logic.SourceLine, symbol logic.SourceDocu
 	}
 }
 
-func sourceHighlightToLSP(lines []logic.SourceLine, highlight logic.SourceHighlight) lspDocumentHighlight {
+func sourceHighlightToLSP(lines []logic.SourceLine, highlight sourceHighlight) lspDocumentHighlight {
 	return lspDocumentHighlight{
 		Range: sourceRangeToLSP(lines, highlight.Range),
 		Kind:  &symbolHighlightKind,
@@ -2188,6 +2405,29 @@ func sourceHighlightToLSP(lines []logic.SourceLine, highlight logic.SourceHighli
 }
 
 var symbolHighlightKind = 1
+
+func sourceDiagnosticsToLSP(result logic.SourceAnalysisResult, programSize bool) []LspDiagnostic {
+	ds := make([]LspDiagnostic, 0, len(result.Diagnostics)+1)
+	for _, diagnostic := range result.Diagnostics {
+		ds = append(ds, sourceDiagnosticToLSP(result.Lines, diagnostic))
+	}
+	if programSize && result.Err == nil && result.OpStream != nil {
+		ds = append(ds, sourceProgramSizeDiagnosticToLSP(len(result.OpStream.Program)))
+	}
+	return ds
+}
+
+func sourceProgramSizeDiagnosticToLSP(size int) LspDiagnostic {
+	sev := int(DiagInfo)
+	return LspDiagnostic{
+		Range: LspRange{
+			Start: LspPosition{},
+			End:   LspPosition{},
+		},
+		Severity: &sev,
+		Message:  fmt.Sprintf("Program size: %d", size),
+	}
+}
 
 func sourceDiagnosticToLSP(lines []logic.SourceLine, diagnostic logic.SourceDiagnostic) LspDiagnostic {
 	sev := int(sourceDiagnosticSeverityToLSP(diagnostic.Severity))
@@ -2214,8 +2454,6 @@ func sourceDiagnosticToLSP(lines []logic.SourceLine, diagnostic logic.SourceDiag
 
 func sourceDiagnosticSeverityToLSP(severity logic.SourceDiagnosticSeverity) DiagnosticSeverity {
 	switch severity {
-	case logic.SourceDiagnosticInfo:
-		return DiagInfo
 	case logic.SourceDiagnosticWarning:
 		return DiagWarn
 	default:

@@ -52,6 +52,12 @@ type SourceLine struct {
 	Statements []SourceStatement
 }
 
+// SourcePosition is a zero-based byte-offset position in assembler source.
+type SourcePosition struct {
+	Line   int
+	Column int
+}
+
 // SourceLinesForTools tokenizes TEAL source using assembler source rules while
 // preserving comments and statement boundaries for editor tooling.
 func SourceLinesForTools(source string) []SourceLine {

@@ -28,21 +28,11 @@ const (
 	SourceCompletionItemOpcode SourceCompletionItemKind = iota
 	SourceCompletionItemArgument
 	SourceCompletionItemDefine
-	SourceCompletionItemSnippet
-)
-
-// SourceCompletionSnippetKind identifies editor-neutral TEAL snippets.
-type SourceCompletionSnippetKind int
-
-const (
-	SourceCompletionSnippetOnCompletionSwitch SourceCompletionSnippetKind = iota
-	SourceCompletionSnippetSubroutine
 )
 
 // SourceCompletionItem is an editor-neutral completion candidate.
 type SourceCompletionItem struct {
 	Kind          SourceCompletionItemKind
-	Snippet       SourceCompletionSnippetKind
 	Label         string
 	Docs          string
 	Detail        string
@@ -171,20 +161,6 @@ func sourceArgumentValuesForTools(result SourceAnalysisResult, arg ToolArg) []To
 
 func sourceOpcodeCompletionsForTools(result SourceAnalysisResult, prefix string) []SourceCompletionItem {
 	var items []SourceCompletionItem
-	items = append(items,
-		SourceCompletionItem{
-			Kind:    SourceCompletionItemSnippet,
-			Snippet: SourceCompletionSnippetOnCompletionSwitch,
-			Label:   "soc",
-			Detail:  "switch on OnCompletion",
-		},
-		SourceCompletionItem{
-			Kind:    SourceCompletionItemSnippet,
-			Snippet: SourceCompletionSnippetSubroutine,
-			Label:   "func",
-			Detail:  "create subroutine",
-		},
-	)
 
 	for _, name := range SourceDefinedNamesForTools(result.Index) {
 		items = append(items, SourceCompletionItem{

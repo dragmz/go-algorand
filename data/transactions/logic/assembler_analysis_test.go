@@ -18,7 +18,6 @@ package logic
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -82,30 +81,12 @@ func TestAnalyzeSourceForToolsWithVersion(t *testing.T) {
 	require.Equal(t, uint64(2), result.OpStream.Version)
 }
 
-func TestSourceDiagnosticsForToolsProgramSize(t *testing.T) {
-	partitiontest.PartitionTest(t)
-	t.Parallel()
-
-	result := AnalyzeSourceForTools("int 1")
-
-	require.Empty(t, SourceDiagnosticsForTools(result, SourceDiagnosticOptions{}))
-	require.Equal(t, []SourceDiagnostic{{
-		Message:  fmt.Sprintf("Program size: %d", len(result.OpStream.Program)),
-		Severity: SourceDiagnosticInfo,
-	}}, SourceDiagnosticsForTools(result, SourceDiagnosticOptions{ProgramSize: true}))
-
-	result = AnalyzeSourceForTools("unknown")
-	for _, diagnostic := range SourceDiagnosticsForTools(result, SourceDiagnosticOptions{ProgramSize: true}) {
-		require.NotEqual(t, SourceDiagnosticInfo, diagnostic.Severity)
-	}
-}
-
 func TestSourcePositionForProgramCounterForTools(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()
 
 	result := AnalyzeSourceForTools("int 1")
-	pcs := sourceProgramCounters(result)
+	pcs := sourceProgramCountersForTest(result)
 	require.NotEmpty(t, pcs)
 
 	position, ok := SourcePositionForProgramCounterForTools(result, pcs[0])
@@ -117,6 +98,14 @@ func TestSourcePositionForProgramCounterForTools(t *testing.T) {
 
 	_, ok = SourcePositionForProgramCounterForTools(SourceAnalysisResult{}, 0)
 	require.False(t, ok)
+}
+
+func sourceProgramCountersForTest(result SourceAnalysisResult) []int {
+	var pcs []int
+	for pc := range result.OpStream.OffsetToSource {
+		pcs = append(pcs, pc)
+	}
+	return pcs
 }
 
 func TestSourceMapForTools(t *testing.T) {
