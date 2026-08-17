@@ -795,7 +795,7 @@ func SourceToolArgAtForTools(lines []SourceLine, program SourceProgram, line int
 		return res, -1, false
 	}
 	for idx, arg := range op.Args {
-		if column >= arg.Token.Column && column <= arg.Token.EndColumn {
+		if sourceTokenContains(arg.Token, column) {
 			return arg.ToolArg, idx, true
 		}
 	}

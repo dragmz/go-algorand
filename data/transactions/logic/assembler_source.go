@@ -35,6 +35,13 @@ type SourceToken struct {
 	EndColumn int
 }
 
+// sourceTokenContains reports whether a byte column falls inside a token. The
+// column one past the last byte counts as inside, so a cursor resting at the
+// end of a word still resolves to that word.
+func sourceTokenContains(token SourceToken, column int) bool {
+	return column >= token.Column && column <= token.EndColumn
+}
+
 // SourceStatement is a semicolon-delimited TEAL source statement.
 type SourceStatement struct {
 	Tokens    []SourceToken

@@ -44,9 +44,11 @@ type SourceCompletionItem struct {
 	Signature     string
 }
 
-// SourceHover is an editor-neutral hover response.
+// SourceHover is an editor-neutral hover response. Text is markdown, and Range
+// is the source range the text describes.
 type SourceHover struct {
-	Text string
+	Text  string
+	Range SourceRange
 }
 
 // SourceSignatureHelp is editor-neutral signature help.
@@ -73,32 +75,118 @@ func SourceCompletionsForTools(result SourceAnalysisResult, line int, column int
 	}
 }
 
+// sourceHoverResolvers answer a hover in order, and the first one that matches
+// wins. Operations are asked before identifiers so that hovering the mnemonic of
+// a branch documents the opcode rather than the label it names.
+var sourceHoverResolvers = []func(SourceAnalysisResult, int, int) (SourceHover, bool){
+	sourceHoverOperation,
+	sourceHoverArgument,
+	sourceHoverIdentifier,
+}
+
 // SourceHoverForTools returns source-aware hover text at a byte-column source
 // position.
 func SourceHoverForTools(result SourceAnalysisResult, line int, column int) (SourceHover, bool) {
+	for _, resolve := range sourceHoverResolvers {
+		if hover, ok := resolve(result, line, column); ok {
+			return hover, true
+		}
+	}
+	return SourceHover{}, false
+}
+
+// sourceHoverIn pairs hover text with the range it describes. An empty document
+// reports false, so no resolver can answer with a blank hover.
+func sourceHoverIn(rg SourceRange, text string) (SourceHover, bool) {
+	if text == "" {
+		return SourceHover{}, false
+	}
+	return SourceHover{Text: text, Range: rg}, true
+}
+
+// sourceHoverOperation documents the opcode or directive under the cursor.
+func sourceHoverOperation(result SourceAnalysisResult, line int, column int) (SourceHover, bool) {
+	op, ok := SourceOperationAtForTools(result.Lines, result.Program, line, column)
+	if !ok || !sourceTokenContains(op.Token, column) {
+		return SourceHover{}, false
+	}
+	meta, ok := ToolOpcodeForTools(op.Name, len(op.Args), result.Mode)
+	if !ok {
+		return SourceHover{}, false
+	}
+	return sourceHoverIn(sourceRangeFromToken(op.Token), sourceMarkdownDoc(meta.Docs, meta.ExtraDocs))
+}
+
+// sourceHoverArgument documents the named value an argument selects. It resolves
+// the operation again rather than sharing it with sourceHoverOperation, which
+// keeps each resolver answerable on its own; hover is a user-driven request, so
+// the repeated lookup does not matter.
+func sourceHoverArgument(result SourceAnalysisResult, line int, column int) (SourceHover, bool) {
 	op, ok := SourceOperationAtForTools(result.Lines, result.Program, line, column)
 	if !ok {
 		return SourceHover{}, false
 	}
-	if column >= op.Token.Column && column <= op.Token.EndColumn {
-		meta, ok := ToolOpcodeForTools(op.Name, len(op.Args), result.Mode)
-		if ok {
-			text := sourceFullDoc(meta.Docs, meta.ExtraDocs)
-			if text != "" {
-				return SourceHover{Text: text}, true
-			}
-		}
-	}
 	for _, arg := range op.Args {
-		if column >= arg.Token.Column && column <= arg.Token.EndColumn && arg.Docs != "" {
-			name := arg.ValueName
-			if name == "" {
-				name = arg.Token.Text
-			}
-			return SourceHover{Text: fmt.Sprintf("%s = %d\r\n%s", name, arg.Value, arg.Docs)}, true
+		if !arg.HasValue || !sourceTokenContains(arg.Token, column) {
+			continue
 		}
+		name := arg.ValueName
+		if name == "" {
+			name = arg.Token.Text
+		}
+		return sourceHoverIn(sourceRangeFromToken(arg.Token),
+			sourceMarkdownDoc(fmt.Sprintf("`%s` = %d", name, arg.Value), arg.Docs))
 	}
 	return SourceHover{}, false
+}
+
+// sourceHoverIdentifier documents the label or macro under the cursor, both at
+// its definition and at every reference to it.
+func sourceHoverIdentifier(result SourceAnalysisResult, line int, column int) (SourceHover, bool) {
+	identifier, ok := SourceIdentifierAtForTools(result.Index, line, column)
+	if !ok {
+		return SourceHover{}, false
+	}
+	rg, ok := SourceIdentifierRangeForTools(identifier)
+	if !ok {
+		return SourceHover{}, false
+	}
+	symbols := SourceSymbolsByNameForTools(result.Index, identifier.Name)
+	if len(symbols) == 0 {
+		return SourceHover{}, false
+	}
+	symbol := symbols[0]
+	return sourceHoverIn(rg, sourceMarkdownDoc(
+		sourceSymbolDeclaration(symbol),
+		symbol.Docs,
+		sourceSymbolReferences(result.Index.RefCounts[symbol.Name]),
+	))
+}
+
+// sourceSymbolDeclaration renders the line naming a symbol, which is the only
+// place a hover over a label or macro says what the name is.
+func sourceSymbolDeclaration(symbol SourceSymbol) string {
+	declaration := symbol.Name + ":"
+	if symbol.Kind == SourceSymbolDefine {
+		declaration = "#define " + symbol.Name
+	}
+	if symbol.Signature != "" {
+		return fmt.Sprintf("`%s` %s", declaration, symbol.Signature)
+	}
+	return fmt.Sprintf("`%s`", declaration)
+}
+
+// sourceSymbolReferences renders how many references a symbol has, and nothing
+// at all for a symbol nothing refers to.
+func sourceSymbolReferences(count int) string {
+	switch count {
+	case 0:
+		return ""
+	case 1:
+		return "1 reference"
+	default:
+		return fmt.Sprintf("%d references", count)
+	}
 }
 
 // SourceSignatureHelpForTools returns source-aware signature help at a
@@ -118,7 +206,7 @@ func SourceSignatureHelpForTools(result SourceAnalysisResult, line int, column i
 	}
 	help := SourceSignatureHelp{
 		Label:           info.FullSignature,
-		Docs:            sourceFullDoc(info.Docs, info.ExtraDocs),
+		Docs:            sourceMarkdownDoc(info.Docs, info.ExtraDocs),
 		ActiveParameter: active,
 	}
 	for _, arg := range info.Args {
@@ -185,12 +273,16 @@ func sourceOpcodeCompletionsForTools(result SourceAnalysisResult, prefix string)
 	return items
 }
 
-func sourceFullDoc(short string, extra string) string {
-	if extra == "" {
-		return short
+// sourceMarkdownDoc joins the sections of a hover or signature document.
+// Sections are separated by a blank line, the only separator markdown renders as
+// a break, so no caller can accidentally run two sections onto one line. Empty
+// sections drop out, which lets callers pass optional parts unconditionally.
+func sourceMarkdownDoc(sections ...string) string {
+	parts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if section != "" {
+			parts = append(parts, section)
+		}
 	}
-	if short == "" {
-		return extra
-	}
-	return fmt.Sprintf("%s\r\n\r\n%s", short, extra)
+	return strings.Join(parts, "\r\n\r\n")
 }

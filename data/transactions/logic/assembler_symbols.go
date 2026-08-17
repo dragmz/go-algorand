@@ -77,6 +77,19 @@ func SourceIdentifierAtForTools(idx SourceIndex, line int, column int) (SourceId
 	return SourceIdentifier{}, false
 }
 
+// SourceIdentifierRangeForTools returns the source range an identifier was
+// found at, which is the symbol's name for a definition and the whole token for
+// a reference.
+func SourceIdentifierRangeForTools(identifier SourceIdentifier) (SourceRange, bool) {
+	if identifier.Symbol != nil {
+		return SourceSymbolNameRangeForTools(*identifier.Symbol), true
+	}
+	if identifier.Reference != nil {
+		return SourceReferenceRangeForTools(*identifier.Reference), true
+	}
+	return SourceRange{}, false
+}
+
 // SourceSymbolsByNameForTools returns symbols with the requested name.
 func SourceSymbolsByNameForTools(idx SourceIndex, name string) []SourceSymbol {
 	var symbols []SourceSymbol

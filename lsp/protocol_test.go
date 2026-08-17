@@ -116,6 +116,14 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"position":     map[string]any{"line": 3, "character": len("  tx")},
 		}),
+		protocolRequest("hover-label", "textDocument/hover", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 5, "character": len("  b ")},
+		}),
+		protocolRequest("hover-none", "textDocument/hover", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 8, "character": 0},
+		}),
 		protocolRequest("signature", "textDocument/signatureHelp", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"position":     map[string]any{"line": 3, "character": len("  txn ")},
@@ -180,6 +188,25 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 
 	hover := protocolResultAs[lspHover](t, protocolResponseByID(t, frames, "hover"))
 	assert.NotEmpty(t, hover.Contents.Value)
+	assert.Equal(t, "markdown", hover.Contents.Kind)
+	require.NotNil(t, hover.Range)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 3, Character: len("  ")},
+		End:   LspPosition{Line: 3, Character: len("  txn")},
+	}, *hover.Range)
+
+	hoverLabel := protocolResultAs[lspHover](t, protocolResponseByID(t, frames, "hover-label"))
+	assert.Contains(t, hoverLabel.Contents.Value, "`start:`")
+	assert.Contains(t, hoverLabel.Contents.Value, "1 reference")
+	require.NotNil(t, hoverLabel.Range)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 5, Character: len("  b ")},
+		End:   LspPosition{Line: 5, Character: len("  b start")},
+	}, *hoverLabel.Range)
+
+	// Nothing to describe answers with an explicit null rather than an object
+	// that is not a valid Hover.
+	assert.Equal(t, "null", string(protocolResponseByID(t, frames, "hover-none").Result))
 
 	signature := protocolResultAs[lspSignatureHelp](t, protocolResponseByID(t, frames, "signature"))
 	require.NotEmpty(t, signature.Signatures)

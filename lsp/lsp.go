@@ -752,9 +752,24 @@ type lspMarkupContent struct {
 	Value string `json:"value"`
 }
 
+// markdownContent wraps documentation the server sends to the client. Every
+// documentation string the assembler exposes is authored as markdown, so this is
+// the only markup kind the server produces.
+func markdownContent(value string) lspMarkupContent {
+	return lspMarkupContent{
+		Kind:  "markdown",
+		Value: value,
+	}
+}
+
+// jsonNull is the JSON null literal. A request whose answer is "nothing found"
+// still has to carry an explicit null result, which an untyped nil cannot
+// express because an empty result is omitted from the response entirely.
+var jsonNull = json.RawMessage("null")
+
 type lspHover struct {
 	Contents lspMarkupContent `json:"contents"`
-	Range    LspRange         `json:"range,omitempty"`
+	Range    *LspRange        `json:"range,omitempty"`
 }
 
 type lspHoverRequestParams struct {
@@ -1216,16 +1231,14 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
 		}
 
-		var c interface{} = struct{}{}
+		var c interface{} = jsonNull
 
 		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
-			hover, ok := logic.SourceHoverForTools(*res, req.Params.Position.Line, column)
-			if ok {
+			if hover, ok := logic.SourceHoverForTools(*res, req.Params.Position.Line, column); ok {
+				rg := sourceRangeToLSP(res.Lines, hover.Range)
 				c = lspHover{
-					Contents: lspMarkupContent{
-						Kind:  "plaintext",
-						Value: hover.Text,
-					},
+					Contents: markdownContent(hover.Text),
+					Range:    &rg,
 				}
 			}
 		}
@@ -1257,7 +1270,7 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
 		}
 
-		var sh interface{} = struct{}{}
+		var sh interface{} = jsonNull
 
 		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
 			help, ok := logic.SourceSignatureHelpForTools(*res, req.Params.Position.Line, column)
@@ -1267,10 +1280,7 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 
 				var doc interface{}
 				if help.Docs != "" {
-					doc = lspMarkupContent{
-						Kind:  "markdown",
-						Value: help.Docs,
-					}
+					doc = markdownContent(help.Docs)
 				}
 
 				ps := []lspParameterInformation{}
@@ -1542,19 +1552,14 @@ func sourcePrepareRename(result logic.SourceAnalysisResult, line int, column int
 	if !ok {
 		return sourcePrepareRenameResult{}, false
 	}
-	if identifier.Symbol != nil {
-		return sourcePrepareRenameResult{
-			Range:       logic.SourceSymbolNameRangeForTools(*identifier.Symbol),
-			Placeholder: identifier.Name,
-		}, true
+	rg, ok := logic.SourceIdentifierRangeForTools(identifier)
+	if !ok {
+		return sourcePrepareRenameResult{}, false
 	}
-	if identifier.Reference != nil {
-		return sourcePrepareRenameResult{
-			Range:       logic.SourceReferenceRangeForTools(*identifier.Reference),
-			Placeholder: identifier.Name,
-		}, true
-	}
-	return sourcePrepareRenameResult{}, false
+	return sourcePrepareRenameResult{
+		Range:       rg,
+		Placeholder: identifier.Name,
+	}, true
 }
 
 func sourceRenameEdits(result logic.SourceAnalysisResult, line int, column int, newName string) []logic.SourceEdit {
@@ -1861,11 +1866,8 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 			format = snippetFormat
 		}
 		return lspCompletionItem{
-			Label: item.Label,
-			Documentation: lspMarkupContent{
-				Kind:  "markdown",
-				Value: item.Docs,
-			},
+			Label:            item.Label,
+			Documentation:    markdownContent(item.Docs),
 			Kind:             operator,
 			InsertText:       insert,
 			InsertTextFormat: format,
@@ -1886,12 +1888,9 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 			}
 		}
 		return lspCompletionItem{
-			LabelDetails: details,
-			Label:        item.Label,
-			Documentation: lspMarkupContent{
-				Kind:  "markdown",
-				Value: item.Docs,
-			},
+			LabelDetails:  details,
+			Label:         item.Label,
+			Documentation: markdownContent(item.Docs),
 		}
 	}
 }

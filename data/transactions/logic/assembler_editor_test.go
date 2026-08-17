@@ -86,11 +86,71 @@ func TestSourceHoverForTools(t *testing.T) {
 	hover, ok := SourceHoverForTools(result, 0, 1)
 	require.True(t, ok)
 	require.Contains(t, hover.Text, "transaction")
+	require.Equal(t, SourceRange{Line: 0, Column: 0, EndLine: 0, EndColumn: len("txn")}, hover.Range)
 
 	hover, ok = SourceHoverForTools(result, 0, len("txn "))
 	require.True(t, ok)
-	require.Contains(t, hover.Text, "Sender =")
+	require.Contains(t, hover.Text, "`Sender` = ")
 	require.Contains(t, hover.Text, "32 byte address")
+	// The value and its documentation are separate sections, so markdown must
+	// not run them onto one line.
+	require.Contains(t, hover.Text, "\r\n\r\n")
+	require.Equal(t, SourceRange{Line: 0, Column: len("txn "), EndLine: 0, EndColumn: len("txn Sender")}, hover.Range)
+
+	_, ok = SourceHoverForTools(result, 0, len("txn Sender")+4)
+	require.False(t, ok)
+}
+
+func TestSourceHoverForToolsLabel(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("#pragma version 8\n// docs\nsub:\nproto 2 1\nretsub\nb sub", SourceToolOptions{Mode: ModeApp})
+
+	definition, ok := SourceHoverForTools(result, 2, 0)
+	require.True(t, ok)
+	require.Contains(t, definition.Text, "`sub:` in: 2, out: 1")
+	require.Contains(t, definition.Text, "docs")
+	require.Contains(t, definition.Text, "1 reference")
+	require.Equal(t, SourceRange{Line: 2, Column: 0, EndLine: 2, EndColumn: len("sub")}, definition.Range)
+
+	// A reference describes the symbol it names, but reports its own range.
+	reference, ok := SourceHoverForTools(result, 5, len("b "))
+	require.True(t, ok)
+	require.Equal(t, definition.Text, reference.Text)
+	require.Equal(t, SourceRange{Line: 5, Column: len("b "), EndLine: 5, EndColumn: len("b sub")}, reference.Range)
+
+	// The mnemonic of a branch documents the opcode, not the label it names.
+	mnemonic, ok := SourceHoverForTools(result, 5, 0)
+	require.True(t, ok)
+	require.NotContains(t, mnemonic.Text, "reference")
+	require.Equal(t, SourceRange{Line: 5, Column: 0, EndLine: 5, EndColumn: len("b")}, mnemonic.Range)
+}
+
+func TestSourceHoverForToolsDefine(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("#pragma version 8\n// value docs\n#define VALUE 1\nint VALUE", SourceToolOptions{Mode: ModeApp})
+
+	hover, ok := SourceHoverForTools(result, 2, len("#define "))
+	require.True(t, ok)
+	require.Contains(t, hover.Text, "`#define VALUE`")
+	require.Contains(t, hover.Text, "value docs")
+	require.Contains(t, hover.Text, "1 reference")
+
+	reference, ok := SourceHoverForTools(result, 3, len("int "))
+	require.True(t, ok)
+	require.Equal(t, hover.Text, reference.Text)
+}
+
+func TestSourceHoverForToolsUnreferencedSymbolOmitsCount(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("#pragma version 8\nsub:\nretsub", SourceToolOptions{Mode: ModeApp})
+
+	hover, ok := SourceHoverForTools(result, 1, 0)
+	require.True(t, ok)
+	require.Equal(t, "`sub:`", hover.Text)
+}
+
+func TestSourceMarkdownDoc(t *testing.T) {
+	require.Equal(t, "", sourceMarkdownDoc())
+	require.Equal(t, "", sourceMarkdownDoc("", ""))
+	require.Equal(t, "only", sourceMarkdownDoc("", "only", ""))
+	require.Equal(t, "first\r\n\r\nsecond", sourceMarkdownDoc("first", "", "second"))
 }
 
 func TestSourceSignatureHelpForTools(t *testing.T) {
