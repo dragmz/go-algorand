@@ -832,8 +832,13 @@ func (l *lsp) reply(id interface{}, result interface{}, err interface{}) error {
 	})
 }
 
-func (l *lsp) fail(id interface{}, err interface{}) error {
-	return l.reply(id, nil, err)
+// failf replies with a JSON-RPC error built from a format string, so a handler
+// can report a failure in a single line.
+func (l *lsp) failf(id interface{}, code int, format string, args ...interface{}) error {
+	return l.reply(id, nil, lspError{
+		Code:    code,
+		Message: fmt.Sprintf(format, args...),
+	})
 }
 
 func (l *lsp) success(id interface{}, result interface{}) error {
@@ -894,13 +899,89 @@ func (l *lsp) reportProgressEnd(token interface{}, message string) error {
 	})
 }
 
-func (l *lsp) prepare(uri string) (*lspDoc, *logic.SourceAnalysisResult, error) {
+// prepare returns the analysis of an open document, for handlers that cannot
+// answer without it.
+func (l *lsp) prepare(uri string) (*logic.SourceAnalysisResult, error) {
 	doc := l.docs[uri]
 	if doc == nil {
-		return nil, nil, errors.New("doc not found")
+		return nil, errors.New("doc not found")
 	}
 
-	return doc, doc.Results(), nil
+	return doc.Results(), nil
+}
+
+// source returns the analysis of an open document, reporting false when the
+// document is unknown. Read-only requests answer with an empty result in that
+// case rather than failing.
+func (l *lsp) source(uri string) (*logic.SourceAnalysisResult, bool) {
+	res, err := l.prepare(uri)
+	return res, err == nil
+}
+
+// results returns the analysis of an open document for a command that names it
+// by argument. Missing documents are reported with the command's own wording.
+func (l *lsp) results(id interface{}, uri string) (*logic.SourceAnalysisResult, bool, error) {
+	doc := l.docs[uri]
+	if doc == nil {
+		return nil, false, l.failf(id, ErrorCodeRequestFailed, "doc not found")
+	}
+
+	return doc.Results(), true, nil
+}
+
+// applyEdit asks the client to apply edits to one document, then answers the
+// command that produced them.
+func (l *lsp) applyEdit(id interface{}, label string, uri string, edits []lspTextEdit) error {
+	err := l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
+		Label: label,
+		Edit:  workspaceEditFor(uri, edits),
+	})
+	if err != nil {
+		return l.failf(id, ErrorCodeRequestFailed, "failed to apply edit: %v", err)
+	}
+
+	return l.success(id, nil)
+}
+
+// commandArg decodes a command whose arguments are a single object.
+//
+// The bool reports whether decoding succeeded; when it is false the returned
+// error is the reply already sent to the client.
+func commandArg[T any](l *lsp, id interface{}, b []byte) (T, bool, error) {
+	var body lspWorkspaceExecuteCommandBody[T]
+	if err := readInto(b, &body); err != nil {
+		var zero T
+		return zero, false, l.failf(id, ErrorCodeParseError, "failed to read request body: %v", err)
+	}
+
+	return body.Params.Arguments, true, nil
+}
+
+// commandArgs decodes a command whose arguments are a one element array, which
+// is how the editing commands are invoked.
+func commandArgs[T any](l *lsp, id interface{}, b []byte) (T, bool, error) {
+	var zero T
+
+	body, ok, err := commandArg[[]T](l, id, b)
+	if !ok {
+		return zero, false, err
+	}
+	if len(body) != 1 {
+		return zero, false, l.failf(id, ErrorCodeInvalidParams, "unexpected number of args")
+	}
+
+	return body[0], true, nil
+}
+
+// sourceAt is source plus the byte column for an LSP position, which is the
+// form every position based request needs.
+func (l *lsp) sourceAt(uri string, position LspPosition) (*logic.SourceAnalysisResult, int, bool) {
+	res, ok := l.source(uri)
+	if !ok {
+		return nil, 0, false
+	}
+
+	return res, sourceColumn(res.Lines, position.Line, position.Character), true
 }
 
 func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
@@ -974,891 +1055,436 @@ func (l *lsp) handle(h jsonRpcHeader, b []byte) error {
 
 		delete(l.docs, req.Params.TextDocument.Uri)
 
-	default: // requests
+	default:
+		return l.handleRequest(h, b)
+	}
 
-		if l.shutdown {
-			return errors.New("cannot process requests - server is shut down")
+	return nil
+}
+
+// handleRequest serves the methods that carry a response. Notifications are
+// handled by handle itself.
+func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
+	if l.shutdown {
+		return errors.New("cannot process requests - server is shut down")
+	}
+
+	switch h.Method {
+	case "shutdown":
+		l.shutdown = true
+		return l.success(h.Id, nil)
+
+	case "$/cancelRequest":
+
+	case "workspace/executeCommand":
+		req, err := read[lspWorkspaceExecuteCommand](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to parse request: %v", err)
 		}
 
-		switch h.Method {
-		case "shutdown":
-			l.shutdown = true
-			return l.success(h.Id, nil)
+		return l.handleWorkspaceCommand(h, b, req.Params.Command)
 
-		case "$/cancelRequest":
+	case "textDocument/prepareRename":
+		req, err := read[lspPrepareRenameRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
 
-		case "workspace/executeCommand":
-			req, err := read[lspWorkspaceExecuteCommand](b)
+		err = l.reportProgressBegin(req.Params.WorkDoneToken, "Preparing Rename", "Checking symbol for rename")
+		if err != nil {
+			l.trace(fmt.Sprintf("Failed to report progress begin: %s", err))
+		}
+
+		res, err := l.prepare(req.Params.TextDocument.Uri)
+		if err != nil {
+			l.reportProgressEnd(req.Params.WorkDoneToken, "Prepare rename failed")
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to prepare document: %v", err)
+		}
+
+		column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+		rename, ok := sourcePrepareRename(*res, req.Params.Position.Line, column)
+		if ok {
+			err = l.reportProgressEnd(req.Params.WorkDoneToken, "Symbol ready for rename")
 			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to parse request: %v", err),
-				})
+				l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
 			}
 
-			switch req.Params.Command {
-			case "teal.sourcemap.generate":
-				var body lspWorkspaceExecuteCommandBody[tealGenerateSourcemapCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
+			return l.success(h.Id, lspPrepareRenameResponse{
+				Range:       sourceRangeToLSP(res.Lines, rename.Range),
+				Placeholder: rename.Placeholder,
+			})
+		}
+
+		err = l.reportProgressEnd(req.Params.WorkDoneToken, "No symbol found for rename")
+		if err != nil {
+			l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
+		}
+
+		return l.success(h.Id, nil)
+
+	case "textDocument/rename":
+		req, err := read[lspRenameRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		err = l.reportProgressBegin(req.Params.WorkDoneToken, "Renaming Symbol", fmt.Sprintf("Renaming to '%s'", req.Params.NewName))
+		if err != nil {
+			l.trace(fmt.Sprintf("Failed to report progress begin: %s", err))
+		}
+
+		res, err := l.prepare(req.Params.TextDocument.Uri)
+		if err != nil {
+			l.reportProgressEnd(req.Params.WorkDoneToken, "Rename failed")
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to prepare document: %v", err)
+		}
+
+		chs := []lspTextEdit{}
+
+		column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
+		chs = append(chs, sourceEditsToLSP(res.Lines, sourceRenameEdits(*res, req.Params.Position.Line, column, req.Params.NewName))...)
+
+		message := fmt.Sprintf("Renamed %d locations", len(chs))
+		err = l.reportProgressEnd(req.Params.WorkDoneToken, message)
+		if err != nil {
+			l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
+		}
+
+		return l.success(h.Id, lspWorkspaceEdit{
+			Changes: map[string][]lspTextEdit{
+				req.Params.TextDocument.Uri: chs,
+			},
+		})
+
+	case "textDocument/codeLens":
+		req, err := read[lspCodeLensRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		var cls []LspCodeLens
+
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			for _, lens := range sourceCodeLenses(*res) {
+				if sourceCodeLensEnabled(l.config, lens) {
+					cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
 				}
-
-				_, res, err := l.prepare(body.Params.Arguments.Uri)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to prepare document: %v", err),
-					})
-				}
-
-				if res.Err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to assemble document: %v", res.Err),
-					})
-				}
-
-				sm, ok := logic.SourceMapForTools(*res, []string{body.Params.Arguments.Uri})
-				if !ok {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: "no opstream",
-					})
-				}
-				return l.success(h.Id, tealGenerateSourcemapCommandResult{
-					SourceMap: sm,
-				})
-
-			case "teal.decompile":
-				var body lspWorkspaceExecuteCommandBody[tealDecompileCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				bs, err := base64.StdEncoding.DecodeString(body.Params.Arguments.Bytecode)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: fmt.Sprintf("failed to decode bytecode: %v", err),
-					})
-				}
-
-				teal, err := logic.Disassemble(bs)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to disassemble bytecode: %v", err),
-					})
-				}
-
-				result := tealDecompileCommandResult{
-					Teal: teal,
-				}
-
-				return l.success(h.Id, result)
-
-			case "teal.pc.resolve":
-				var body lspWorkspaceExecuteCommandBody[tealGotoPcCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				_, res, err := l.prepare(body.Params.Arguments.Uri)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to prepare document: %v", err),
-					})
-				}
-
-				if res.Err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to assemble document: %v", res.Err),
-					})
-				}
-
-				pos, ok := logic.SourcePositionForProgramCounterForTools(*res, body.Params.Arguments.Pc)
-				if !ok {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: "pc not found",
-					})
-				}
-
-				return l.success(h.Id, LspPosition{
-					Line: pos.Line, Character: pos.Column,
-				})
-
-			case "teal.version.update":
-				var body lspWorkspaceExecuteCommandBody[[]tealUpdateVersion]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				args := body.Params.Arguments
-				if len(args) != 1 {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: errors.New("unexpected number of args").Error(),
-					})
-				}
-
-				arg := args[0]
-
-				doc := l.docs[arg.Uri]
-				if doc == nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: errors.New("doc not found").Error(),
-					})
-				}
-
-				res := doc.Results()
-				edits := []lspTextEdit{
-					sourceEditToLSP(res.Lines, logic.SourceEditUpdateVersionForTools(res.Index, arg.Version)),
-				}
-
-				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
-					Label: "Update version",
-					Edit: lspWorkspaceEdit{
-						DocumentChanges: []lspTextDocumentEdit{
-							{
-								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
-									Uri: arg.Uri,
-								},
-								Edits: edits,
-							},
-						},
-					},
-				})
-
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to apply edit: %v", err),
-					})
-				}
-
-				return l.success(h.Id, nil)
-
-			case "teal.value.replace":
-				var body lspWorkspaceExecuteCommandBody[[]tealReplaceValueCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				args := body.Params.Arguments
-				if len(args) != 1 {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: errors.New("unexpected number of args").Error(),
-					})
-				}
-
-				arg := args[0]
-
-				doc := l.docs[arg.Uri]
-				if doc == nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: errors.New("doc not found").Error(),
-					})
-				}
-
-				edits := []lspTextEdit{
-					{
-						Range:   arg.Range,
-						NewText: arg.Value,
-					},
-				}
-
-				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
-					Label: "Replace with named value",
-					Edit: lspWorkspaceEdit{
-						DocumentChanges: []lspTextDocumentEdit{
-							{
-								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
-									Uri: arg.Uri,
-								},
-								Edits: edits,
-							},
-						},
-					},
-				})
-
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to apply edit: %v", err),
-					})
-				}
-
-				return l.success(h.Id, nil)
-			case "teal.call.remove":
-				var body lspWorkspaceExecuteCommandBody[[]tealRemoveCallCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				args := body.Params.Arguments
-				if len(args) != 1 {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: errors.New("unexpected number of args").Error(),
-					})
-				}
-
-				arg := args[0]
-
-				doc := l.docs[arg.Uri]
-				if doc == nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: errors.New("doc not found").Error(),
-					})
-				}
-
-				line := arg.Line
-				statement := arg.Statement
-				res := doc.Results()
-				edit, ok := logic.SourceEditRemoveStatementForTools(res.Lines, line, statement)
-				if !ok {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: errors.New("statement not found").Error(),
-					})
-				}
-
-				edits := []lspTextEdit{sourceEditToLSP(res.Lines, edit)}
-
-				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
-					Label: "Remove call",
-					Edit: lspWorkspaceEdit{
-						DocumentChanges: []lspTextDocumentEdit{
-							{
-								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
-									Uri: arg.Uri,
-								},
-								Edits: edits,
-							},
-						},
-					},
-				})
-
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to apply edit: %v", err),
-					})
-				}
-
-				return l.success(h.Id, nil)
-			case "teal.label.remove":
-				var body lspWorkspaceExecuteCommandBody[[]tealRemoveLabelCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				args := body.Params.Arguments
-				if len(args) != 1 {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: errors.New("unexpected number of args").Error(),
-					})
-				}
-
-				arg := args[0]
-
-				_, res, err := l.prepare(arg.Uri)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to prepare document: %v", err),
-					})
-				}
-
-				name := arg.Name
-
-				edits := sourceEditsToLSP(res.Lines, logic.SourceEditsRemoveSymbolForTools(res.Index, body.Params.Arguments[0].Name))
-
-				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
-					Label: fmt.Sprintf("Remove label: %s", name),
-					Edit: lspWorkspaceEdit{
-						DocumentChanges: []lspTextDocumentEdit{
-							{
-								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
-									Uri: arg.Uri,
-								},
-								Edits: edits,
-							},
-						},
-					},
-				})
-
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to apply edit: %v", err),
-					})
-				}
-
-				return l.success(h.Id, nil)
-
-			case "teal.label.create":
-				var body lspWorkspaceExecuteCommandBody[[]tealCreateLabelCommandArgs]
-				err := readInto(b, &body)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeParseError,
-						Message: fmt.Sprintf("failed to read request body: %v", err),
-					})
-				}
-
-				args := body.Params.Arguments
-				if len(args) != 1 {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeInvalidParams,
-						Message: errors.New("unexpected number of args").Error(),
-					})
-				}
-
-				arg := args[0]
-
-				_, res, err := l.prepare(arg.Uri)
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to prepare document: %v", err),
-					})
-				}
-
-				name := arg.Name
-
-				err = l.request("workspace/applyEdit", lspWorkspaceApplyEditRequestParams{
-					Label: fmt.Sprintf("Create label: %s", name),
-					Edit: lspWorkspaceEdit{
-						DocumentChanges: []lspTextDocumentEdit{
-							{
-								TextDocument: lspOptionalVersionedTextDocumentIdentifier{
-									Uri: arg.Uri,
-								},
-								Edits: sourceEditsToLSP(res.Lines, []logic.SourceEdit{logic.SourceEditCreateLabelForTools(res.Lines, name)}),
-							},
-						},
-					},
-				})
-
-				if err != nil {
-					return l.fail(h.Id, lspError{
-						Code:    ErrorCodeRequestFailed,
-						Message: fmt.Sprintf("failed to apply edit: %v", err),
-					})
-				}
-
-				return l.success(h.Id, nil)
-
-			default:
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeMethodNotFound,
-					Message: fmt.Sprintf("unknown command: %s", req.Params.Command),
-				})
 			}
+		}
 
-		case "textDocument/prepareRename":
-			req, err := read[lspPrepareRenameRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
+		return l.success(h.Id, cls)
+
+	case "textDocument/inlayHint":
+		req, err := read[lspInlayHintRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		ihs := []LspInlayHint{}
+
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			for _, inlay := range sourceInlays(*res) {
+				if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.Lines, inlay, req.Params.Range) {
+					ihs = append(ihs, sourceInlayToLSP(res.Lines, inlay))
+				}
 			}
+		}
+		return l.success(h.Id, ihs)
 
-			err = l.reportProgressBegin(req.Params.WorkDoneToken, "Preparing Rename", "Checking symbol for rename")
-			if err != nil {
-				l.trace(fmt.Sprintf("Failed to report progress begin: %s", err))
-			}
+	case "textDocument/completion":
+		req, err := read[lspCompletionRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+		ccs := []lspCompletionItem{}
 
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				l.reportProgressEnd(req.Params.WorkDoneToken, "Prepare rename failed")
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeRequestFailed,
-					Message: fmt.Sprintf("failed to prepare document: %v", err),
-				})
-			}
+		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
+			ccs = sourceCompletionsAtToLSP(*res, req.Params.Position.Line, column)
+		}
 
-			column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-			rename, ok := sourcePrepareRename(*res, req.Params.Position.Line, column)
+		if len(ccs) == 0 {
+			ccs = append(ccs, lspCompletionItem{
+				Label: "",
+			})
+		}
+
+		return l.success(h.Id, ccs)
+
+	case "textDocument/hover":
+		req, err := read[lspHoverRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		var c interface{} = struct{}{}
+
+		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
+			hover, ok := logic.SourceHoverForTools(*res, req.Params.Position.Line, column)
 			if ok {
-				err = l.reportProgressEnd(req.Params.WorkDoneToken, "Symbol ready for rename")
-				if err != nil {
-					l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
+				c = lspHover{
+					Contents: lspMarkupContent{
+						Kind:  "plaintext",
+						Value: hover.Text,
+					},
 				}
+			}
+		}
 
-				return l.success(h.Id, lspPrepareRenameResponse{
-					Range:       sourceRangeToLSP(res.Lines, rename.Range),
-					Placeholder: rename.Placeholder,
+		return l.success(h.Id, c)
+
+	case "textDocument/definition":
+		req, err := read[lspDefinitionRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		ls := []lspLocation{}
+
+		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
+			for _, rg := range sourceDefinitions(*res, req.Params.Position.Line, column) {
+				ls = append(ls, lspLocation{
+					Uri:   req.Params.TextDocument.Uri,
+					Range: sourceRangeToLSP(res.Lines, rg),
 				})
 			}
+		}
 
-			err = l.reportProgressEnd(req.Params.WorkDoneToken, "No symbol found for rename")
-			if err != nil {
-				l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
-			}
+		return l.success(h.Id, ls)
 
-			return l.success(h.Id, nil)
+	case "textDocument/signatureHelp":
+		req, err := read[lspSignatureHelpRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
 
-		case "textDocument/rename":
-			req, err := read[lspRenameRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
+		var sh interface{} = struct{}{}
 
-			err = l.reportProgressBegin(req.Params.WorkDoneToken, "Renaming Symbol", fmt.Sprintf("Renaming to '%s'", req.Params.NewName))
-			if err != nil {
-				l.trace(fmt.Sprintf("Failed to report progress begin: %s", err))
-			}
+		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
+			help, ok := logic.SourceSignatureHelpForTools(*res, req.Params.Position.Line, column)
+			if ok {
+				active := new(int)
+				*active = help.ActiveParameter
 
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err != nil {
-				l.reportProgressEnd(req.Params.WorkDoneToken, "Rename failed")
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeRequestFailed,
-					Message: fmt.Sprintf("failed to prepare document: %v", err),
-				})
-			}
-
-			chs := []lspTextEdit{}
-
-			column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-			chs = append(chs, sourceEditsToLSP(res.Lines, sourceRenameEdits(*res, req.Params.Position.Line, column, req.Params.NewName))...)
-
-			message := fmt.Sprintf("Renamed %d locations", len(chs))
-			err = l.reportProgressEnd(req.Params.WorkDoneToken, message)
-			if err != nil {
-				l.trace(fmt.Sprintf("Failed to report progress end: %s", err))
-			}
-
-			return l.success(h.Id, lspWorkspaceEdit{
-				Changes: map[string][]lspTextEdit{
-					req.Params.TextDocument.Uri: chs,
-				},
-			})
-
-		case "textDocument/codeLens":
-			req, err := read[lspCodeLensRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			var cls []LspCodeLens
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				for _, lens := range sourceCodeLenses(*res) {
-					if sourceCodeLensEnabled(l.config, lens) {
-						cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
+				var doc interface{}
+				if help.Docs != "" {
+					doc = lspMarkupContent{
+						Kind:  "markdown",
+						Value: help.Docs,
 					}
 				}
-			}
 
-			return l.success(h.Id, cls)
-
-		case "textDocument/inlayHint":
-			req, err := read[lspInlayHintRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			ihs := []LspInlayHint{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				for _, inlay := range sourceInlays(*res) {
-					if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.Lines, inlay, req.Params.Range) {
-						ihs = append(ihs, sourceInlayToLSP(res.Lines, inlay))
-					}
-				}
-			}
-			return l.success(h.Id, ihs)
-
-		case "textDocument/completion":
-			req, err := read[lspCompletionRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-			ccs := []lspCompletionItem{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				ccs = sourceCompletionsAtToLSP(*res, req.Params.Position.Line, column)
-			}
-
-			if len(ccs) == 0 {
-				ccs = append(ccs, lspCompletionItem{
-					Label: "",
-				})
-			}
-
-			return l.success(h.Id, ccs)
-
-		case "textDocument/hover":
-			req, err := read[lspHoverRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			var c interface{} = struct{}{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				hover, ok := logic.SourceHoverForTools(*res, req.Params.Position.Line, column)
-				if ok {
-					c = lspHover{
-						Contents: lspMarkupContent{
-							Kind:  "plaintext",
-							Value: hover.Text,
-						},
-					}
-				}
-			}
-
-			return l.success(h.Id, c)
-
-		case "textDocument/definition":
-			req, err := read[lspDefinitionRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			ls := []lspLocation{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				for _, rg := range sourceDefinitions(*res, req.Params.Position.Line, column) {
-					ls = append(ls, lspLocation{
-						Uri:   req.Params.TextDocument.Uri,
-						Range: sourceRangeToLSP(res.Lines, rg),
+				ps := []lspParameterInformation{}
+				for _, parameter := range help.Parameters {
+					ps = append(ps, lspParameterInformation{
+						Label: parameter,
 					})
 				}
-			}
 
-			return l.success(h.Id, ls)
-
-		case "textDocument/signatureHelp":
-			req, err := read[lspSignatureHelpRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			var sh interface{} = struct{}{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				help, ok := logic.SourceSignatureHelpForTools(*res, req.Params.Position.Line, column)
-				if ok {
-					active := new(int)
-					*active = help.ActiveParameter
-
-					var doc interface{}
-					if help.Docs != "" {
-						doc = lspMarkupContent{
-							Kind:  "markdown",
-							Value: help.Docs,
-						}
-					}
-
-					ps := []lspParameterInformation{}
-					for _, parameter := range help.Parameters {
-						ps = append(ps, lspParameterInformation{
-							Label: parameter,
-						})
-					}
-
-					sh = &lspSignatureHelp{
-						Signatures: []lspSignatureInformation{
-							{
-								Label:           help.Label,
-								Documentation:   doc,
-								Parameters:      ps,
-								ActiveParameter: active,
-							},
-						},
-					}
-				}
-			}
-
-			return l.success(h.Id, sh)
-
-		case "textDocument/codeAction":
-			req, err := read[lspCodeActionRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read request body: %v", err),
-				})
-			}
-
-			cas := []lspCodeAction{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				rg := sourceRangeFromLSP(res.Lines, req.Params.Range)
-				for _, action := range logic.SourceActionsForTools(res.Lines, res.Index, res.Program, rg) {
-					cas = append(cas, sourceActionToLSP(req.Params.TextDocument.Uri, res.Lines, action))
-				}
-			}
-
-			return l.success(h.Id, cas)
-		case "textDocument/diagnostic":
-			req, err := read[lspDiagnosticRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read diagnostic request: %s", err),
-				})
-			}
-
-			ds := []LspDiagnostic{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				ds = sourceDiagnosticsToLSP(*res, l.config.ProgramSize)
-			}
-
-			return l.success(h.Id, lspFullDocumentDiagnosticReport{
-				Kind:  "full",
-				Items: ds,
-			})
-
-		case "textDocument/documentHighlight":
-			req, err := read[lspDocumentHighlightRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read document highlight request: %s", err),
-				})
-			}
-
-			hs := []lspDocumentHighlight{}
-
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				column := sourceColumn(res.Lines, req.Params.Position.Line, req.Params.Position.Character)
-				for _, highlight := range sourceHighlights(*res, req.Params.Position.Line, column) {
-					hs = append(hs, sourceHighlightToLSP(res.Lines, highlight))
-				}
-			}
-
-			return l.success(h.Id, hs)
-		case "textDocument/documentSymbol":
-			req, err := read[lspDocumentSymbolRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read document symbol request: %s", err),
-				})
-			}
-
-			syms := []LspDocumentSymbol{}
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				for _, symbol := range sourceDocumentSymbols(*res) {
-					syms = append(syms, sourceDocumentSymbolToLSP(res.Lines, symbol))
-				}
-			}
-			return l.success(h.Id, syms)
-
-		case "textDocument/semanticTokens/full":
-			req, err := read[lspSemanticTokensFullRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read semantic tokens full request: %s", err),
-				})
-			}
-
-			st := SemanticTokens{}
-			_, res, err := l.prepare(req.Params.TextDocument.Uri)
-			if err == nil {
-				for _, token := range logic.SourceSemanticTokensForTools(*res) {
-					st = append(st, sourceSemanticTokenToLSP(res.Lines, token))
-				}
-			}
-
-			data := st.Encode()
-
-			return l.success(h.Id, lspSemanticTokens{
-				Data: data,
-			})
-
-		case "initialize":
-			req, err := read[lspInitializeRequest](b)
-			if err != nil {
-				return l.fail(h.Id, lspError{
-					Code:    ErrorCodeParseError,
-					Message: fmt.Sprintf("failed to read initialize request: %s", err),
-				})
-			}
-
-			if req.Params != nil {
-				if req.Params.InitializationOptions != nil {
-					if req.Params.InitializationOptions.SemanticTokens != nil {
-						l.config.SemanticTokens = *req.Params.InitializationOptions.SemanticTokens
-					}
-					if req.Params.InitializationOptions.InlayNamed != nil {
-						l.config.InlayNamed = *req.Params.InitializationOptions.InlayNamed
-					}
-					if req.Params.InitializationOptions.InlayDecoded != nil {
-						l.config.InlayDecoded = *req.Params.InitializationOptions.InlayDecoded
-					}
-					if req.Params.InitializationOptions.LensRefs != nil {
-						l.config.LensRefs = *req.Params.InitializationOptions.LensRefs
-					}
-					if req.Params.InitializationOptions.PcInlay != nil {
-						l.config.PcInlay = *req.Params.InitializationOptions.PcInlay
-					}
-					if req.Params.InitializationOptions.PcLens != nil {
-						l.config.PcLens = *req.Params.InitializationOptions.PcLens
-					}
-					if req.Params.InitializationOptions.ProgramSize != nil {
-						l.config.ProgramSize = *req.Params.InitializationOptions.ProgramSize
-					}
-				}
-			}
-
-			sync := new(int)
-			*sync = 1
-
-			definition := new(bool)
-			*definition = true
-
-			symbol := new(bool)
-			*symbol = true
-
-			action := new(bool)
-			*action = true
-
-			rename := new(bool)
-			*rename = true
-
-			highlight := new(bool)
-			*highlight = true
-
-			fullSemantic := new(bool)
-			*fullSemantic = true
-
-			hover := new(bool)
-			*hover = true
-
-			inlayHint := new(bool)
-			if l.config.InlayNamed || l.config.InlayDecoded {
-				*inlayHint = true
-			}
-
-			var semanticTokensProvider *lspSemanticTokensProvider
-
-			if l.config.SemanticTokens {
-				semanticTokensProvider = &lspSemanticTokensProvider{
-					Full: fullSemantic,
-					Legend: lspSemanticTokensLegend{
-						TokenTypes:     []string{"keyword", "string", "comment", "method", "macro", "value", "number", "operator", "function"},
-						TokenModifiers: []string{},
-					},
-				}
-			}
-
-			return l.success(h.Id, lspInitializeResult{
-				Capabilities: &lspServerCapabilities{
-					TextDocumentSync:          sync,
-					DocumentHighlightProvider: highlight,
-					DiagnosticProvider:        &lspDiagnosticProvider{},
-					DocumentSymbolProvider:    symbol,
-					CodeActionProvider:        action,
-					ExecuteCommandProvider: &lspExecuteCommandProvider{
-						Commands: []string{
-							"teal.sourcemap.generate",
-							"teal.decompile",
-							"teal.label.create",
-							"teal.label.remove",
-							"teal.value.replace",
-							"teal.call.remove",
-							"teal.version.update",
-							"teal.pc.resolve",
+				sh = &lspSignatureHelp{
+					Signatures: []lspSignatureInformation{
+						{
+							Label:           help.Label,
+							Documentation:   doc,
+							Parameters:      ps,
+							ActiveParameter: active,
 						},
 					},
-					RenameProvider: &lspRenameOptions{
-						PrepareProvider:  rename,
-						WorkDoneProgress: rename,
-					},
-					SemanticTokensProvider: semanticTokensProvider,
-					CompletionProvider: &lspCompletionProvider{
-						TriggerCharacters: []string{" "},
-					},
-					DefinitionProvider:    definition,
-					HoverProvider:         hover,
-					SignatureHelpProvider: &lspSignatureHelpOptions{},
-					InlayHintProvider:     inlayHint,
-					CodeLensProvider:      &lspCodeLensProvider{},
-				},
-			})
-		default:
-			return errors.New("unknown method")
+				}
+			}
 		}
+
+		return l.success(h.Id, sh)
+
+	case "textDocument/codeAction":
+		req, err := read[lspCodeActionRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		cas := []lspCodeAction{}
+
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			rg := sourceRangeFromLSP(res.Lines, req.Params.Range)
+			for _, action := range logic.SourceActionsForTools(res.Lines, res.Index, res.Program, rg) {
+				cas = append(cas, sourceActionToLSP(req.Params.TextDocument.Uri, res.Lines, action))
+			}
+		}
+
+		return l.success(h.Id, cas)
+	case "textDocument/diagnostic":
+		req, err := read[lspDiagnosticRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read diagnostic request: %s", err)
+		}
+
+		ds := []LspDiagnostic{}
+
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			ds = sourceDiagnosticsToLSP(*res, l.config.ProgramSize)
+		}
+
+		return l.success(h.Id, lspFullDocumentDiagnosticReport{
+			Kind:  "full",
+			Items: ds,
+		})
+
+	case "textDocument/documentHighlight":
+		req, err := read[lspDocumentHighlightRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read document highlight request: %s", err)
+		}
+
+		hs := []lspDocumentHighlight{}
+
+		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
+			for _, highlight := range sourceHighlights(*res, req.Params.Position.Line, column) {
+				hs = append(hs, sourceHighlightToLSP(res.Lines, highlight))
+			}
+		}
+
+		return l.success(h.Id, hs)
+	case "textDocument/documentSymbol":
+		req, err := read[lspDocumentSymbolRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read document symbol request: %s", err)
+		}
+
+		syms := []LspDocumentSymbol{}
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			for _, symbol := range sourceDocumentSymbols(*res) {
+				syms = append(syms, sourceDocumentSymbolToLSP(res.Lines, symbol))
+			}
+		}
+		return l.success(h.Id, syms)
+
+	case "textDocument/semanticTokens/full":
+		req, err := read[lspSemanticTokensFullRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read semantic tokens full request: %s", err)
+		}
+
+		st := SemanticTokens{}
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			for _, token := range logic.SourceSemanticTokensForTools(*res) {
+				st = append(st, sourceSemanticTokenToLSP(res.Lines, token))
+			}
+		}
+
+		data := st.Encode()
+
+		return l.success(h.Id, lspSemanticTokens{
+			Data: data,
+		})
+
+	case "initialize":
+		req, err := read[lspInitializeRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read initialize request: %s", err)
+		}
+
+		if req.Params != nil {
+			if req.Params.InitializationOptions != nil {
+				if req.Params.InitializationOptions.SemanticTokens != nil {
+					l.config.SemanticTokens = *req.Params.InitializationOptions.SemanticTokens
+				}
+				if req.Params.InitializationOptions.InlayNamed != nil {
+					l.config.InlayNamed = *req.Params.InitializationOptions.InlayNamed
+				}
+				if req.Params.InitializationOptions.InlayDecoded != nil {
+					l.config.InlayDecoded = *req.Params.InitializationOptions.InlayDecoded
+				}
+				if req.Params.InitializationOptions.LensRefs != nil {
+					l.config.LensRefs = *req.Params.InitializationOptions.LensRefs
+				}
+				if req.Params.InitializationOptions.PcInlay != nil {
+					l.config.PcInlay = *req.Params.InitializationOptions.PcInlay
+				}
+				if req.Params.InitializationOptions.PcLens != nil {
+					l.config.PcLens = *req.Params.InitializationOptions.PcLens
+				}
+				if req.Params.InitializationOptions.ProgramSize != nil {
+					l.config.ProgramSize = *req.Params.InitializationOptions.ProgramSize
+				}
+			}
+		}
+
+		sync := new(int)
+		*sync = 1
+
+		definition := new(bool)
+		*definition = true
+
+		symbol := new(bool)
+		*symbol = true
+
+		action := new(bool)
+		*action = true
+
+		rename := new(bool)
+		*rename = true
+
+		highlight := new(bool)
+		*highlight = true
+
+		fullSemantic := new(bool)
+		*fullSemantic = true
+
+		hover := new(bool)
+		*hover = true
+
+		inlayHint := new(bool)
+		if l.config.InlayNamed || l.config.InlayDecoded {
+			*inlayHint = true
+		}
+
+		var semanticTokensProvider *lspSemanticTokensProvider
+
+		if l.config.SemanticTokens {
+			semanticTokensProvider = &lspSemanticTokensProvider{
+				Full: fullSemantic,
+				Legend: lspSemanticTokensLegend{
+					TokenTypes:     []string{"keyword", "string", "comment", "method", "macro", "value", "number", "operator", "function"},
+					TokenModifiers: []string{},
+				},
+			}
+		}
+
+		return l.success(h.Id, lspInitializeResult{
+			Capabilities: &lspServerCapabilities{
+				TextDocumentSync:          sync,
+				DocumentHighlightProvider: highlight,
+				DiagnosticProvider:        &lspDiagnosticProvider{},
+				DocumentSymbolProvider:    symbol,
+				CodeActionProvider:        action,
+				ExecuteCommandProvider: &lspExecuteCommandProvider{
+					Commands: []string{
+						"teal.sourcemap.generate",
+						"teal.decompile",
+						"teal.label.create",
+						"teal.label.remove",
+						"teal.value.replace",
+						"teal.call.remove",
+						"teal.version.update",
+						"teal.pc.resolve",
+					},
+				},
+				RenameProvider: &lspRenameOptions{
+					PrepareProvider:  rename,
+					WorkDoneProgress: rename,
+				},
+				SemanticTokensProvider: semanticTokensProvider,
+				CompletionProvider: &lspCompletionProvider{
+					TriggerCharacters: []string{" "},
+				},
+				DefinitionProvider:    definition,
+				HoverProvider:         hover,
+				SignatureHelpProvider: &lspSignatureHelpOptions{},
+				InlayHintProvider:     inlayHint,
+				CodeLensProvider:      &lspCodeLensProvider{},
+			},
+		})
+	default:
+		return errors.New("unknown method")
 	}
 
 	return nil
@@ -2303,17 +1929,22 @@ func sourceOnCompletionSwitchSnippet() string {
 	return fmt.Sprintf("txn OnCompletion\nswitch %s\n%s", at, bt)
 }
 
-func workspaceEditFromSourceEdits(uri string, lines []logic.SourceLine, edits []logic.SourceEdit) lspWorkspaceEdit {
+// workspaceEditFor wraps edits to a single document in a workspace edit.
+func workspaceEditFor(uri string, edits []lspTextEdit) lspWorkspaceEdit {
 	return lspWorkspaceEdit{
 		DocumentChanges: []lspTextDocumentEdit{
 			{
 				TextDocument: lspOptionalVersionedTextDocumentIdentifier{
 					Uri: uri,
 				},
-				Edits: sourceEditsToLSP(lines, edits),
+				Edits: edits,
 			},
 		},
 	}
+}
+
+func workspaceEditFromSourceEdits(uri string, lines []logic.SourceLine, edits []logic.SourceEdit) lspWorkspaceEdit {
+	return workspaceEditFor(uri, sourceEditsToLSP(lines, edits))
 }
 
 func sourceEditsToLSP(lines []logic.SourceLine, edits []logic.SourceEdit) []lspTextEdit {
@@ -2611,4 +2242,161 @@ func (l *lsp) Run() (int, error) {
 	}
 
 	return l.exitCode, nil
+}
+
+// handleWorkspaceCommand serves workspace/executeCommand. Each command reads
+// its own argument shape out of the original request body.
+func (l *lsp) handleWorkspaceCommand(h jsonRpcHeader, b []byte, command string) error {
+	switch command {
+	case "teal.sourcemap.generate":
+		arg, ok, err := commandArg[tealGenerateSourcemapCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		res, err := l.prepare(arg.Uri)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to prepare document: %v", err)
+		}
+
+		if res.Err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to assemble document: %v", res.Err)
+		}
+
+		sm, ok := logic.SourceMapForTools(*res, []string{arg.Uri})
+		if !ok {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "no opstream")
+		}
+
+		return l.success(h.Id, tealGenerateSourcemapCommandResult{
+			SourceMap: sm,
+		})
+
+	case "teal.decompile":
+		arg, ok, err := commandArg[tealDecompileCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		bs, err := base64.StdEncoding.DecodeString(arg.Bytecode)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeInvalidParams, "failed to decode bytecode: %v", err)
+		}
+
+		teal, err := logic.Disassemble(bs)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to disassemble bytecode: %v", err)
+		}
+
+		return l.success(h.Id, tealDecompileCommandResult{
+			Teal: teal,
+		})
+
+	case "teal.pc.resolve":
+		arg, ok, err := commandArg[tealGotoPcCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		res, err := l.prepare(arg.Uri)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to prepare document: %v", err)
+		}
+
+		if res.Err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to assemble document: %v", res.Err)
+		}
+
+		pos, ok := logic.SourcePositionForProgramCounterForTools(*res, arg.Pc)
+		if !ok {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "pc not found")
+		}
+
+		return l.success(h.Id, LspPosition{
+			Line: pos.Line, Character: pos.Column,
+		})
+
+	case "teal.version.update":
+		arg, ok, err := commandArgs[tealUpdateVersion](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		res, ok, err := l.results(h.Id, arg.Uri)
+		if !ok {
+			return err
+		}
+
+		return l.applyEdit(h.Id, "Update version", arg.Uri, []lspTextEdit{
+			sourceEditToLSP(res.Lines, logic.SourceEditUpdateVersionForTools(res.Index, arg.Version)),
+		})
+
+	case "teal.value.replace":
+		arg, ok, err := commandArgs[tealReplaceValueCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		if _, ok, err := l.results(h.Id, arg.Uri); !ok {
+			return err
+		}
+
+		return l.applyEdit(h.Id, "Replace with named value", arg.Uri, []lspTextEdit{
+			{
+				Range:   arg.Range,
+				NewText: arg.Value,
+			},
+		})
+
+	case "teal.call.remove":
+		arg, ok, err := commandArgs[tealRemoveCallCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		res, ok, err := l.results(h.Id, arg.Uri)
+		if !ok {
+			return err
+		}
+
+		edit, ok := logic.SourceEditRemoveStatementForTools(res.Lines, arg.Line, arg.Statement)
+		if !ok {
+			return l.failf(h.Id, ErrorCodeInvalidParams, "statement not found")
+		}
+
+		return l.applyEdit(h.Id, "Remove call", arg.Uri, []lspTextEdit{
+			sourceEditToLSP(res.Lines, edit),
+		})
+
+	case "teal.label.remove":
+		arg, ok, err := commandArgs[tealRemoveLabelCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		res, err := l.prepare(arg.Uri)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to prepare document: %v", err)
+		}
+
+		return l.applyEdit(h.Id, fmt.Sprintf("Remove label: %s", arg.Name), arg.Uri,
+			sourceEditsToLSP(res.Lines, logic.SourceEditsRemoveSymbolForTools(res.Index, arg.Name)))
+
+	case "teal.label.create":
+		arg, ok, err := commandArgs[tealCreateLabelCommandArgs](l, h.Id, b)
+		if !ok {
+			return err
+		}
+
+		res, err := l.prepare(arg.Uri)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeRequestFailed, "failed to prepare document: %v", err)
+		}
+
+		return l.applyEdit(h.Id, fmt.Sprintf("Create label: %s", arg.Name), arg.Uri,
+			sourceEditsToLSP(res.Lines, []logic.SourceEdit{logic.SourceEditCreateLabelForTools(res.Lines, arg.Name)}))
+
+	default:
+		return l.failf(h.Id, ErrorCodeMethodNotFound, "unknown command: %s", command)
+	}
 }
