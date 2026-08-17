@@ -1320,7 +1320,7 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 		ds := []LspDiagnostic{}
 
 		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
-			ds = sourceDiagnosticsToLSP(*res, l.config.ProgramSize)
+			ds = sourceDiagnosticsToLSP(*res)
 		}
 
 		return l.success(h.Id, lspFullDocumentDiagnosticReport{
@@ -1495,6 +1495,7 @@ type sourceCodeLensKind int
 const (
 	sourceCodeLensReferenceCount sourceCodeLensKind = iota
 	sourceCodeLensProgramCounter
+	sourceCodeLensProgramSize
 )
 
 type sourceCodeLens struct {
@@ -1502,6 +1503,7 @@ type sourceCodeLens struct {
 	Range          logic.SourceRange
 	ReferenceCount int
 	ProgramCounter int
+	ProgramSize    int
 }
 
 type sourceInlayKind int
@@ -1607,6 +1609,16 @@ func sourceDocumentSymbols(result logic.SourceAnalysisResult) []sourceDocumentSy
 
 func sourceCodeLenses(result logic.SourceAnalysisResult) []sourceCodeLens {
 	var lenses []sourceCodeLens
+
+	// The assembled size is only known for a program that assembles, and it
+	// describes the whole document rather than any one line, so it sits at the
+	// top of the file.
+	if result.Err == nil && result.OpStream != nil {
+		lenses = append(lenses, sourceCodeLens{
+			Kind:        sourceCodeLensProgramSize,
+			ProgramSize: len(result.OpStream.Program),
+		})
+	}
 
 	for _, symbol := range result.Index.Symbols {
 		count := result.Index.RefCounts[symbol.Name]
@@ -1720,6 +1732,8 @@ func sourceCodeLensEnabled(config tealConfig, lens sourceCodeLens) bool {
 		return config.LensRefs
 	case sourceCodeLensProgramCounter:
 		return config.PcLens
+	case sourceCodeLensProgramSize:
+		return config.ProgramSize
 	default:
 		return false
 	}
@@ -1732,6 +1746,8 @@ func sourceCodeLensToLSP(lines []logic.SourceLine, lens sourceCodeLens) LspCodeL
 		title = fmt.Sprintf("refs: %d", lens.ReferenceCount)
 	case sourceCodeLensProgramCounter:
 		title = fmt.Sprintf("pc: %d", lens.ProgramCounter)
+	case sourceCodeLensProgramSize:
+		title = fmt.Sprintf("size: %d bytes", lens.ProgramSize)
 	default:
 	}
 	return LspCodeLens{
@@ -2081,27 +2097,12 @@ func sourceHighlightToLSP(lines []logic.SourceLine, highlight sourceHighlight) l
 
 var symbolHighlightKind = 1
 
-func sourceDiagnosticsToLSP(result logic.SourceAnalysisResult, programSize bool) []LspDiagnostic {
-	ds := make([]LspDiagnostic, 0, len(result.Diagnostics)+1)
+func sourceDiagnosticsToLSP(result logic.SourceAnalysisResult) []LspDiagnostic {
+	ds := make([]LspDiagnostic, 0, len(result.Diagnostics))
 	for _, diagnostic := range result.Diagnostics {
 		ds = append(ds, sourceDiagnosticToLSP(result.Lines, diagnostic))
 	}
-	if programSize && result.Err == nil && result.OpStream != nil {
-		ds = append(ds, sourceProgramSizeDiagnosticToLSP(len(result.OpStream.Program)))
-	}
 	return ds
-}
-
-func sourceProgramSizeDiagnosticToLSP(size int) LspDiagnostic {
-	sev := int(DiagInfo)
-	return LspDiagnostic{
-		Range: LspRange{
-			Start: LspPosition{},
-			End:   LspPosition{},
-		},
-		Severity: &sev,
-		Message:  fmt.Sprintf("Program size: %d", size),
-	}
 }
 
 func sourceDiagnosticToLSP(lines []logic.SourceLine, diagnostic logic.SourceDiagnostic) LspDiagnostic {

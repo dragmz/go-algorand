@@ -167,8 +167,7 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 
 	diagnostics := protocolResultAs[lspFullDocumentDiagnosticReport](t, protocolResponseByID(t, frames, "diagnostic"))
 	assert.Equal(t, "full", diagnostics.Kind)
-	require.Len(t, diagnostics.Items, 1)
-	assert.Contains(t, diagnostics.Items[0].Message, "Program size:")
+	assert.Empty(t, diagnostics.Items)
 
 	opCompletions := protocolResultAs[[]lspCompletionItem](t, protocolResponseByID(t, frames, "completion-op"))
 	opLabels := protocolCompletionLabels(opCompletions)
@@ -217,6 +216,7 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 	require.NotEmpty(t, lenses)
 	assert.True(t, protocolCodeLensTitleContains(lenses, "refs:"))
 	assert.True(t, protocolCodeLensTitleContains(lenses, "pc:"))
+	assert.True(t, protocolCodeLensTitleContains(lenses, "size:"))
 
 	inlays := protocolResultAs[[]LspInlayHint](t, protocolResponseByID(t, frames, "inlays"))
 	require.NotEmpty(t, inlays)

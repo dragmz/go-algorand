@@ -6,6 +6,7 @@ import (
 
 	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUtf16LenString(t *testing.T) {
@@ -87,20 +88,40 @@ func TestSourceDiagnosticSeverityToLSP(t *testing.T) {
 	assert.Equal(t, DiagnosticSeverity(DiagWarn), sourceDiagnosticSeverityToLSP(logic.SourceDiagnosticWarning))
 }
 
-func TestSourceDiagnosticsToLSPProgramSize(t *testing.T) {
-	result := logic.AnalyzeSourceForTools("int 1")
+func TestSourceDiagnosticsToLSPReportsOnlyAssemblyDiagnostics(t *testing.T) {
+	assert.Empty(t, sourceDiagnosticsToLSP(logic.AnalyzeSourceForTools("int 1")))
 
-	diagnostics := sourceDiagnosticsToLSP(result, true)
-	assert.Len(t, diagnostics, 1)
-	assert.Equal(t, fmt.Sprintf("Program size: %d", len(result.OpStream.Program)), diagnostics[0].Message)
-	assert.NotNil(t, diagnostics[0].Severity)
-	assert.Equal(t, int(DiagInfo), *diagnostics[0].Severity)
-
-	result = logic.AnalyzeSourceForTools("unknown")
-	for _, diagnostic := range sourceDiagnosticsToLSP(result, true) {
+	for _, diagnostic := range sourceDiagnosticsToLSP(logic.AnalyzeSourceForTools("unknown")) {
 		assert.NotNil(t, diagnostic.Severity)
 		assert.NotEqual(t, int(DiagInfo), *diagnostic.Severity)
 	}
+}
+
+func TestSourceCodeLensesProgramSize(t *testing.T) {
+	result := logic.AnalyzeSourceForTools("int 1")
+
+	lens, ok := sourceCodeLensOfKind(sourceCodeLenses(result), sourceCodeLensProgramSize)
+	require.True(t, ok)
+	assert.Equal(t, len(result.OpStream.Program), lens.ProgramSize)
+	assert.True(t, sourceCodeLensEnabled(tealConfig{ProgramSize: true}, lens))
+	assert.False(t, sourceCodeLensEnabled(tealConfig{}, lens))
+
+	cl := sourceCodeLensToLSP(result.Lines, lens)
+	assert.Equal(t, fmt.Sprintf("size: %d bytes", len(result.OpStream.Program)), cl.Command.Title)
+	assert.Equal(t, LspRange{}, cl.Range)
+
+	// A program that does not assemble has no size to report.
+	_, ok = sourceCodeLensOfKind(sourceCodeLenses(logic.AnalyzeSourceForTools("unknown")), sourceCodeLensProgramSize)
+	assert.False(t, ok)
+}
+
+func sourceCodeLensOfKind(lenses []sourceCodeLens, kind sourceCodeLensKind) (sourceCodeLens, bool) {
+	for _, lens := range lenses {
+		if lens.Kind == kind {
+			return lens, true
+		}
+	}
+	return sourceCodeLens{}, false
 }
 
 func TestSourceDocumentSymbolToLSP(t *testing.T) {

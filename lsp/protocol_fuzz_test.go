@@ -121,7 +121,7 @@ func FuzzSourceFeatureConversions(f *testing.F) {
 		result := Process(source)
 		line, character, column := fuzzResolvedPosition(result.Lines, lineSeed, characterSeed)
 
-		_ = sourceDiagnosticsToLSP(*result, true)
+		_ = sourceDiagnosticsToLSP(*result)
 		_ = sourceCompletionsAtToLSP(*result, line, column)
 
 		if hover, ok := logic.SourceHoverForTools(*result, line, column); ok {
