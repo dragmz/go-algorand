@@ -43,7 +43,7 @@ func TestToolOpcodeArgsForPseudoOps(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "txn", op.Name)
 	require.Len(t, op.Args, 2)
-	require.Equal(t, ToolFieldTxn, op.Args[0].FieldGroup)
+	require.Equal(t, &TxnFields, op.Args[0].FieldGroup)
 	require.True(t, op.Args[1].Optional)
 }
 
@@ -51,7 +51,7 @@ func TestToolArgValuesForTools(t *testing.T) {
 	values := ToolArgValuesForTools(ToolArgConstInt, ToolFieldNone, 8, ModeApp)
 	require.Contains(t, toolArgValueNamesForTest(values), "DeleteApplication")
 
-	fields := ToolArgValuesForTools(ToolArgField, ToolFieldTxn, 8, ModeApp)
+	fields := ToolArgValuesForTools(ToolArgField, &TxnFields, 8, ModeApp)
 	require.Contains(t, toolArgValueNamesForTest(fields), "Sender")
 }
 
@@ -138,7 +138,7 @@ func TestSourceToolArgAtForTools(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 0, idx)
 	require.Equal(t, ToolArgField, arg.Kind)
-	require.Equal(t, ToolFieldTxn, arg.FieldGroup)
+	require.Equal(t, &TxnFields, arg.FieldGroup)
 }
 
 func TestSourceInlayHintsForTools(t *testing.T) {
@@ -157,6 +157,102 @@ func TestSourceInlayHintsForTools(t *testing.T) {
 	}
 	require.True(t, named)
 	require.True(t, decoded)
+}
+
+// TestToolFieldGroupsCoverAllImmediates checks that every field immediate an
+// opcode declares resolves to values an editor can offer, at the version the
+// opcode was introduced and at every later version. A field group the tooling
+// cannot resolve still reports as ToolArgField, but yields no completions and
+// no documentation.
+func TestToolFieldGroupsCoverAllImmediates(t *testing.T) {
+	for _, spec := range OpSpecs {
+		for _, imm := range spec.Immediates {
+			if imm.Group == nil {
+				continue
+			}
+
+			for version := spec.Version; version <= LogicVersion; version++ {
+				for _, mode := range []RunMode{ModeApp, ModeSig} {
+					if spec.Modes&mode == 0 {
+						continue
+					}
+					values := toolFieldValues(imm.Group, version, mode)
+					require.NotEmptyf(t, values,
+						"field group %q used by %s (v%d) resolves to no values at v%d mode %d",
+						imm.Group.Name, spec.Name, spec.Version, version, mode)
+				}
+			}
+		}
+	}
+}
+
+// TestToolOpcodeArgsResolveAllVersions checks the editor-visible argument
+// surface of every mnemonic across every version and mode: a field argument
+// must name a group, and that group must resolve to values.
+func TestToolOpcodeArgsResolveAllVersions(t *testing.T) {
+	for _, name := range toolOpcodeNames() {
+		for _, mode := range []RunMode{ModeApp, ModeSig} {
+			for argCount := 0; argCount <= 3; argCount++ {
+				op, ok := ToolOpcodeForTools(name, argCount, mode)
+				if !ok {
+					continue
+				}
+				for i, arg := range op.Args {
+					if arg.Kind != ToolArgField {
+						continue
+					}
+					require.NotNilf(t, arg.FieldGroup,
+						"%s arg %d (%s) is a field argument with no group", name, i, arg.Name)
+
+					for version := op.Version; version <= LogicVersion; version++ {
+						require.NotEmptyf(t,
+							ToolArgValuesForTools(arg.Kind, arg.FieldGroup, version, mode),
+							"%s arg %d (%s) resolves to no values at v%d mode %d",
+							name, i, arg.Name, version, mode)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestToolOpcodesForToolsNewestVersions checks that opcodes added in the most
+// recent versions expose their immediates to editors.
+func TestToolOpcodesForToolsNewestVersions(t *testing.T) {
+	poseidon2, ok := ToolOpcodeForTools("poseidon2", 1, ModeApp)
+	require.True(t, ok)
+	require.Equal(t, uint64(poseidon2Version), poseidon2.Version)
+	require.Len(t, poseidon2.Args, 1)
+	require.Equal(t, ToolArgField, poseidon2.Args[0].Kind)
+	require.Equal(t, &Poseidon2Configs, poseidon2.Args[0].FieldGroup)
+	poseidon2Values := toolArgValueNamesForTest(
+		ToolArgValuesForTools(poseidon2.Args[0].Kind, poseidon2.Args[0].FieldGroup, LogicVersion, ModeApp))
+	require.Contains(t, poseidon2Values, "BN254t2")
+
+	appParamsSet, ok := ToolOpcodeForTools("app_params_set", 1, ModeApp)
+	require.True(t, ok)
+	require.Equal(t, uint64(foreignBoxVersion), appParamsSet.Version)
+	require.Len(t, appParamsSet.Args, 1)
+	require.Equal(t, ToolArgField, appParamsSet.Args[0].Kind)
+	require.Equal(t, &AppParamsSettableFields, appParamsSet.Args[0].FieldGroup)
+	require.NotEmpty(t,
+		ToolArgValuesForTools(appParamsSet.Args[0].Kind, appParamsSet.Args[0].FieldGroup, LogicVersion, ModeApp))
+
+	// sumhash512 is the newest opcode and takes no immediates.
+	sumhash, ok := ToolOpcodeForTools("sumhash512", 0, ModeApp)
+	require.True(t, ok)
+	require.Equal(t, uint64(sumhashVersion), sumhash.Version)
+	require.Empty(t, sumhash.Args)
+
+	// Opcodes only reachable at the newest versions must be offered there.
+	newest := toolOpcodeNamesForTest(ToolOpcodesForTools(LogicVersion, ModeApp))
+	require.Contains(t, newest, "poseidon2")
+	require.Contains(t, newest, "app_params_set")
+	require.Contains(t, newest, "sumhash512")
+	require.Contains(t, newest, "app_box_create")
+
+	older := toolOpcodeNamesForTest(ToolOpcodesForTools(sumhashVersion-1, ModeApp))
+	require.NotContains(t, older, "sumhash512")
 }
 
 func toolOpcodeNamesForTest(ops []ToolOpcode) map[string]bool {

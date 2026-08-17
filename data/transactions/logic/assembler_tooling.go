@@ -52,27 +52,13 @@ const (
 )
 
 // ToolFieldGroup identifies named immediate value groups.
-type ToolFieldGroup int
+// ToolFieldGroup is the assembler field group an argument selects a value
+// from. It is the assembler's own group rather than a parallel enumeration, so
+// a field group added upstream is picked up here without any change.
+type ToolFieldGroup = *FieldGroup
 
-const (
-	ToolFieldNone ToolFieldGroup = iota
-	ToolFieldTxn
-	ToolFieldTxna
-	ToolFieldItxn
-	ToolFieldGlobal
-	ToolFieldEcdsaCurve
-	ToolFieldEcGroup
-	ToolFieldBase64Encoding
-	ToolFieldJSONRef
-	ToolFieldVrfStandard
-	ToolFieldBlock
-	ToolFieldAssetHolding
-	ToolFieldAssetParams
-	ToolFieldAppParams
-	ToolFieldAcctParams
-	ToolFieldVoterParams
-	ToolFieldMimc
-)
+// ToolFieldNone marks an argument that does not select from a field group.
+var ToolFieldNone ToolFieldGroup
 
 // ToolArg is a source-level argument accepted by an opcode or assembler
 // directive.
@@ -210,9 +196,9 @@ var toolSourceOverlays = map[string]toolOpcodeOverlay{
 	"byte":    {args: []ToolArg{{Name: "value", Kind: ToolArgBytes}}, version: 1, modes: modeAny},
 	"int":     {args: []ToolArg{{Name: "value", Kind: ToolArgConstInt}}, version: 1, modes: modeAny},
 	"method":  {args: []ToolArg{{Name: "signature", Kind: ToolArgSignature}}, version: 1, modes: modeAny},
-	"txn":     {args: []ToolArg{{Name: "f", Kind: ToolArgField, FieldGroup: ToolFieldTxn}, {Name: "i", Kind: ToolArgUint8, Optional: true}}, version: 1, modes: modeAny},
-	"gtxn":    {args: []ToolArg{{Name: "t", Kind: ToolArgUint8}, {Name: "f", Kind: ToolArgField, FieldGroup: ToolFieldTxn}, {Name: "i", Kind: ToolArgUint8, Optional: true}}, version: 1, modes: modeAny},
-	"gtxns":   {args: []ToolArg{{Name: "f", Kind: ToolArgField, FieldGroup: ToolFieldTxn}, {Name: "i", Kind: ToolArgUint8, Optional: true}}, version: 3, modes: modeAny},
+	"txn":     {args: []ToolArg{{Name: "f", Kind: ToolArgField, FieldGroup: &TxnFields}, {Name: "i", Kind: ToolArgUint8, Optional: true}}, version: 1, modes: modeAny},
+	"gtxn":    {args: []ToolArg{{Name: "t", Kind: ToolArgUint8}, {Name: "f", Kind: ToolArgField, FieldGroup: &TxnFields}, {Name: "i", Kind: ToolArgUint8, Optional: true}}, version: 1, modes: modeAny},
+	"gtxns":   {args: []ToolArg{{Name: "f", Kind: ToolArgField, FieldGroup: &TxnFields}, {Name: "i", Kind: ToolArgUint8, Optional: true}}, version: 3, modes: modeAny},
 	"extract": {args: []ToolArg{{Name: "s", Kind: ToolArgUint8, Optional: true}, {Name: "l", Kind: ToolArgUint8, Optional: true}}, version: 5, modes: modeAny},
 	"replace": {args: []ToolArg{{Name: "s", Kind: ToolArgUint8, Optional: true}}, version: 7, modes: modeAny},
 }
@@ -465,47 +451,7 @@ func toolArgKindFromImmediate(imm immediate) ToolArgKind {
 }
 
 func toolFieldGroupFromImmediate(imm immediate) ToolFieldGroup {
-	if imm.Group == nil {
-		return ToolFieldNone
-	}
-	return toolFieldGroupFromName(imm.Group.Name)
-}
-
-func toolFieldGroupFromName(name string) ToolFieldGroup {
-	switch name {
-	case TxnFields.Name, TxnScalarFields.Name:
-		return ToolFieldTxn
-	case TxnArrayFields.Name:
-		return ToolFieldTxna
-	case GlobalFields.Name:
-		return ToolFieldGlobal
-	case EcdsaCurves.Name:
-		return ToolFieldEcdsaCurve
-	case EcGroups.Name:
-		return ToolFieldEcGroup
-	case Base64Encodings.Name:
-		return ToolFieldBase64Encoding
-	case JSONRefTypes.Name:
-		return ToolFieldJSONRef
-	case VrfStandards.Name:
-		return ToolFieldVrfStandard
-	case BlockFields.Name:
-		return ToolFieldBlock
-	case AssetHoldingFields.Name:
-		return ToolFieldAssetHolding
-	case AssetParamsFields.Name:
-		return ToolFieldAssetParams
-	case AppParamsFields.Name:
-		return ToolFieldAppParams
-	case AcctParamsFields.Name:
-		return ToolFieldAcctParams
-	case VoterParamsFields.Name:
-		return ToolFieldVoterParams
-	case MimcConfigs.Name:
-		return ToolFieldMimc
-	default:
-		return ToolFieldNone
-	}
+	return imm.Group
 }
 
 func toolArgsSignature(args []ToolArg, typed bool) string {
@@ -568,43 +514,36 @@ func toolArgKindString(arg ToolArg) string {
 	}
 }
 
+// toolFieldGroupLabels names the type shown for a field argument in signature
+// help. Groups without an entry fall back to the assembler's own group name,
+// so a field group added upstream is still described.
+var toolFieldGroupLabels = map[string]string{
+	TxnFields.Name:          "transaction field index",
+	TxnScalarFields.Name:    "transaction field index",
+	TxnArrayFields.Name:     "transaction array field index",
+	GlobalFields.Name:       "global field index",
+	EcdsaCurves.Name:        "ECDSA Curve",
+	EcGroups.Name:           "EC group field index",
+	Base64Encodings.Name:    "base64 encoding",
+	JSONRefTypes.Name:       "json_Ref",
+	VrfStandards.Name:       "parameters index",
+	BlockFields.Name:        "block field",
+	AssetHoldingFields.Name: "asset holding field index",
+	AssetParamsFields.Name:  "asset params field index",
+	AppParamsFields.Name:    "app params field index",
+	AcctParamsFields.Name:   "account params field index",
+	VoterParamsFields.Name:  "voter params field index",
+	MimcConfigs.Name:        "MiMC field index",
+}
+
 func toolFieldGroupString(group ToolFieldGroup) string {
-	switch group {
-	case ToolFieldTxna:
-		return "transaction array field index"
-	case ToolFieldTxn:
-		return "transaction field index"
-	case ToolFieldItxn:
-		return "internal transaction field index"
-	case ToolFieldGlobal:
-		return "global field index"
-	case ToolFieldEcdsaCurve:
-		return "ECDSA Curve"
-	case ToolFieldEcGroup:
-		return "EC group field index"
-	case ToolFieldBase64Encoding:
-		return "base64 encoding"
-	case ToolFieldJSONRef:
-		return "json_Ref"
-	case ToolFieldVrfStandard:
-		return "parameters index"
-	case ToolFieldBlock:
-		return "block field"
-	case ToolFieldAssetHolding:
-		return "asset holding field index"
-	case ToolFieldAssetParams:
-		return "asset params field index"
-	case ToolFieldAppParams:
-		return "app params field index"
-	case ToolFieldAcctParams:
-		return "account params field index"
-	case ToolFieldVoterParams:
-		return "voter params field index"
-	case ToolFieldMimc:
-		return "MiMC field index"
-	default:
+	if group == nil {
 		return "(none)"
 	}
+	if label, ok := toolFieldGroupLabels[group.Name]; ok {
+		return label
+	}
+	return group.Name
 }
 
 // ToolArgValuesForTools returns named values for a tooling argument kind.
@@ -701,76 +640,16 @@ func toolFieldValues(group ToolFieldGroup, version uint64, mode RunMode) []ToolA
 }
 
 func buildToolFieldValues(group ToolFieldGroup, version uint64, mode RunMode) []ToolArgValue {
-	switch group {
-	case ToolFieldTxn:
-		return toolTxnFieldValues(version, mode, false, false)
-	case ToolFieldTxna:
-		return toolTxnFieldValues(version, mode, true, false)
-	case ToolFieldItxn:
-		return toolTxnFieldValues(version, mode, false, true)
-	case ToolFieldGlobal:
-		return toolFieldGroupValues(&GlobalFields, version, mode)
-	case ToolFieldEcdsaCurve:
-		return toolFieldGroupValues(&EcdsaCurves, version, mode)
-	case ToolFieldEcGroup:
-		return toolFieldGroupValues(&EcGroups, version, mode)
-	case ToolFieldBase64Encoding:
-		return toolFieldGroupValues(&Base64Encodings, version, mode)
-	case ToolFieldJSONRef:
-		return toolFieldGroupValues(&JSONRefTypes, version, mode)
-	case ToolFieldVrfStandard:
-		return toolFieldGroupValues(&VrfStandards, version, mode)
-	case ToolFieldBlock:
-		return toolFieldGroupValues(&BlockFields, version, mode)
-	case ToolFieldAssetHolding:
-		return toolFieldGroupValues(&AssetHoldingFields, version, mode)
-	case ToolFieldAssetParams:
-		return toolFieldGroupValues(&AssetParamsFields, version, mode)
-	case ToolFieldAppParams:
-		return toolFieldGroupValues(&AppParamsFields, version, mode)
-	case ToolFieldAcctParams:
-		return toolFieldGroupValues(&AcctParamsFields, version, mode)
-	case ToolFieldVoterParams:
-		return toolFieldGroupValues(&VoterParamsFields, version, mode)
-	case ToolFieldMimc:
-		return toolFieldGroupValues(&MimcConfigs, version, mode)
-	default:
+	if group == nil {
 		return nil
 	}
-}
-
-func toolTxnFieldValues(version uint64, mode RunMode, array bool, itxn bool) []ToolArgValue {
-	var values []ToolArgValue
-	for _, name := range TxnFields.Names {
-		if name == "" {
-			continue
-		}
-		fs, ok := TxnFields.SpecByName(name)
-		if !ok {
-			continue
-		}
-		txnSpec := fs.(txnFieldSpec)
-		if array && !txnSpec.array {
-			continue
-		}
-		fieldVersion := txnSpec.Version()
-		if itxn {
-			fieldVersion = txnSpec.itxVersion
-			if fieldVersion == 0 {
-				continue
-			}
-		}
-		if version > 0 && fieldVersion > version {
-			continue
-		}
-		values = append(values, ToolArgValue{
-			Value:   uint64(txnSpec.Field()),
-			Name:    name,
-			Docs:    txnSpec.Note(),
-			Version: fieldVersion,
-		})
+	// txn, gtxn and gtxns take an optional index immediate, so they accept the
+	// array fields as well as the scalar ones. Widen the scalar group rather
+	// than offering an incomplete list.
+	if group == &TxnScalarFields {
+		group = &TxnFields
 	}
-	return values
+	return toolFieldGroupValues(group, version, mode)
 }
 
 func toolFieldGroupValues(group *FieldGroup, version uint64, mode RunMode) []ToolArgValue {
