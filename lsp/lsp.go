@@ -2,15 +2,16 @@ package lsp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/textproto"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/pkg/errors"
@@ -60,7 +61,22 @@ type lsp struct {
 	tp *textproto.Reader
 	w  *bufio.Writer
 
+	// wbuf and enc serialize outgoing messages. Reusing them across writes
+	// keeps the response path from allocating a fresh buffer per message.
+	// The server is single threaded, so sharing them is safe.
+	wbuf bytes.Buffer
+	enc  *json.Encoder
+
+	// rbuf backs the incoming message body across reads.
+	rbuf []byte
+
 	debug *bufio.Writer
+}
+
+// tracing reports whether debug tracing is enabled. Callers use it to skip
+// formatting trace payloads on the hot request and response paths.
+func (l *lsp) tracing() bool {
+	return l.debug != nil
 }
 
 type LspOption func(l *lsp) error
@@ -87,6 +103,8 @@ func New(r io.Reader, w io.Writer, opts ...LspOption) (*lsp, error) {
 			PcInlay:        false,
 		},
 	}
+
+	l.enc = json.NewEncoder(&l.wbuf)
 
 	for _, opt := range opts {
 		err := opt(l)
@@ -2115,11 +2133,23 @@ func sourceInlayInRange(lines []logic.SourceLine, inlay sourceInlay, rg LspRange
 	return Overlaps(sourceRangeToLSP(lines, inlay.Range), rg)
 }
 
+// Constant LSP enum values shared by every response. Nothing writes through
+// these pointers, so one instance each avoids an allocation per item.
+var (
+	completionKindOperator  = intPtr(25)
+	completionKindSnippet   = intPtr(15)
+	insertTextFormatSnippet = intPtr(2)
+	inlayKindParameter      = intPtr(2)
+	inlayPaddingLeft        = boolPtr(true)
+)
+
+func intPtr(v int) *int { return &v }
+
+func boolPtr(v bool) *bool { return &v }
+
 func sourceInlayToLSP(lines []logic.SourceLine, inlay sourceInlay) LspInlayHint {
-	parameter := new(int)
-	*parameter = 2
-	padding := new(bool)
-	*padding = true
+	parameter := inlayKindParameter
+	padding := inlayPaddingLeft
 
 	label := inlay.Label
 	if inlay.Kind == sourceInlayProgramCounter {
@@ -2155,11 +2185,24 @@ func sourceCompletionsToLSP(items []logic.SourceCompletionItem) []lspCompletionI
 	return completions
 }
 
+// snippetForArgs renders "label ${1:first} ${2:second}" for a completion's
+// argument list.
+func snippetForArgs(label string, args []logic.ToolArg) string {
+	var b strings.Builder
+	b.WriteString(label)
+	for i, arg := range args {
+		b.WriteString(" ${")
+		b.WriteString(strconv.Itoa(i + 1))
+		b.WriteByte(':')
+		b.WriteString(arg.Name)
+		b.WriteByte('}')
+	}
+	return b.String()
+}
+
 func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
-	operator := new(int)
-	*operator = 25
-	snippetFormat := new(int)
-	*snippetFormat = 2
+	operator := completionKindOperator
+	snippetFormat := insertTextFormatSnippet
 
 	switch item.Kind {
 	case logic.SourceCompletionItemDefine:
@@ -2172,14 +2215,7 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 		var insert string
 		var format *int
 		if len(item.Args) > 0 {
-			var placeholders string
-			for i, arg := range item.Args {
-				if i > 0 {
-					placeholders += " "
-				}
-				placeholders += fmt.Sprintf("${%d:%s}", i+1, arg.Name)
-			}
-			insert = fmt.Sprintf("%s %s", item.Label, placeholders)
+			insert = snippetForArgs(item.Label, item.Args)
 			format = snippetFormat
 		}
 		return lspCompletionItem{
@@ -2192,7 +2228,7 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 			InsertText:       insert,
 			InsertTextFormat: format,
 			LabelDetails: &lspCompletionItemLabelDetails{
-				Description: fmt.Sprintf("v%d", item.Version),
+				Description: "v" + strconv.FormatUint(item.Version, 10),
 				Detail:      " " + item.ArgsSignature,
 			},
 		}
@@ -2219,26 +2255,29 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 }
 
 func sourceSnippetCompletionsToLSP() []lspCompletionItem {
-	snippet := 15
-	snippetFormat := new(int)
-	*snippetFormat = 2
+	snippet := completionKindSnippet
+	snippetFormat := insertTextFormatSnippet
 	return []lspCompletionItem{
 		{
 			Label:            "soc",
-			Kind:             &snippet,
+			Kind:             snippet,
 			Detail:           "switch on OnCompletion",
-			InsertText:       sourceOnCompletionSwitchSnippet(),
+			InsertText:       onCompletionSwitchSnippet(),
 			InsertTextFormat: snippetFormat,
 		},
 		{
 			Label:            "func",
-			Kind:             &snippet,
+			Kind:             snippet,
 			Detail:           "create subroutine",
 			InsertText:       "${1:sub}:\r\n\r\n\tproto ${2:0} ${3:0}\r\n\t${4}\r\n\tretsub\r\n",
 			InsertTextFormat: snippetFormat,
 		},
 	}
 }
+
+// onCompletionSwitchSnippet caches the snippet, which is derived purely from
+// logic.OnCompletionNames and so is the same for every request.
+var onCompletionSwitchSnippet = sync.OnceValue(sourceOnCompletionSwitchSnippet)
 
 func sourceOnCompletionSwitchSnippet() string {
 	var at string
@@ -2467,24 +2506,27 @@ func sourceDiagnosticSeverityToLSP(severity logic.SourceDiagnosticSeverity) Diag
 }
 
 func (l *lsp) write(v interface{}) error {
-	rb, err := json.Marshal(v)
-	if err != nil {
+	l.wbuf.Reset()
+	if err := l.enc.Encode(v); err != nil {
 		return errors.Wrap(err, "failed to marshal response")
 	}
 
-	l.trace(fmt.Sprintf("OUT: %s", string(rb)))
+	// Encode terminates the value with a newline that is not part of the
+	// message body.
+	rb := bytes.TrimSuffix(l.wbuf.Bytes(), []byte("\n"))
 
-	h := http.Header{}
-	h.Set("Content-Length", strconv.Itoa(len(rb)))
-
-	err = h.Write(l.w)
-	if err != nil {
-		return errors.Wrap(err, "failed to write response headers")
+	if l.tracing() {
+		l.trace(fmt.Sprintf("OUT: %s", rb))
 	}
 
-	_, err = l.w.Write([]byte("\r\n"))
+	var hdr [40]byte
+	h := append(hdr[:0], "Content-Length: "...)
+	h = strconv.AppendInt(h, int64(len(rb)), 10)
+	h = append(h, '\r', '\n', '\r', '\n')
+
+	_, err := l.w.Write(h)
 	if err != nil {
-		return errors.Wrap(err, "failed to write")
+		return errors.Wrap(err, "failed to write response headers")
 	}
 
 	_, err = l.w.Write(rb)
@@ -2524,20 +2566,26 @@ func (l *lsp) Run() (int, error) {
 				return errors.Wrap(err, "failed to read request headers")
 			}
 
-			h := http.Header(mh)
-
-			length, err := strconv.Atoi(h.Get("Content-Length"))
+			length, err := strconv.Atoi(mh.Get("Content-Length"))
 			if err != nil {
 				return errors.Wrap(err, "failed to parse content length")
 			}
 
-			data := make([]byte, length)
+			// The body is decoded before the next read, so a single growing
+			// buffer can back every message.
+			if cap(l.rbuf) < length {
+				l.rbuf = make([]byte, length)
+			}
+			data := l.rbuf[:length]
+
 			_, err = io.ReadFull(l.tp.R, data)
 			if err != nil {
 				return errors.Wrap(err, "failed to read content body")
 			}
 
-			l.trace(fmt.Sprintf("IN: %s", string(data)))
+			if l.tracing() {
+				l.trace(fmt.Sprintf("IN: %s", data))
+			}
 
 			var jh jsonRpcHeader
 			err = json.Unmarshal(data, &jh)

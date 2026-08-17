@@ -45,9 +45,11 @@ func byteColumnFromUTF16Column(line string, character int) int {
 	return len(line)
 }
 
+const logicSigModePragma = "#pragma mode logicsig"
+
 func sourceModeForLSP(lines []logic.SourceLine) logic.RunMode {
 	for _, line := range lines {
-		if line.Comment != nil && strings.TrimSpace(line.Comment.Text) == "#pragma mode logicsig" {
+		if line.Comment != nil && strings.TrimSpace(line.Comment.Text) == logicSigModePragma {
 			return logic.ModeSig
 		}
 	}
@@ -55,8 +57,13 @@ func sourceModeForLSP(lines []logic.SourceLine) logic.RunMode {
 }
 
 func Process(source string) *logic.SourceAnalysisResult {
-	initialLines := logic.SourceLinesForTools(source)
-	mode := sourceModeForLSP(initialLines)
+	// AnalyzeSourceForToolsWithOptions splits the source into lines itself, so
+	// only pay for a second pass when the pragma could actually be present.
+	mode := logic.ModeApp
+	if strings.Contains(source, logicSigModePragma) {
+		mode = sourceModeForLSP(logic.SourceLinesForTools(source))
+	}
+
 	analysis := logic.AnalyzeSourceForToolsWithOptions(source, logic.SourceToolOptions{
 		Mode: mode,
 	})

@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // SourceToolOptions controls source analysis that depends on editor context
@@ -216,14 +217,38 @@ var toolSourceOverlays = map[string]toolOpcodeOverlay{
 	"replace": {args: []ToolArg{{Name: "s", Kind: ToolArgUint8, Optional: true}}, version: 7, modes: modeAny},
 }
 
+type toolOpcodeSetKey struct {
+	version uint64
+	mode    RunMode
+}
+
+// toolOpcodeSets memoizes ToolOpcodesForTools. Editors ask for the same
+// (version, mode) pair on every completion request, and the answer only
+// depends on assembler tables that are fixed after package init.
+var toolOpcodeSets sync.Map // toolOpcodeSetKey -> []ToolOpcode
+
 // ToolOpcodesForTools returns source-level opcode metadata available at the
 // requested version and mode.
+//
+// The result is cached and shared between callers, so it must be treated as
+// read only.
 func ToolOpcodesForTools(version uint64, mode RunMode) []ToolOpcode {
 	if mode == 0 {
 		mode = ModeApp
 	}
 	if version == 0 {
 		version = AssemblerDefaultVersion
+	}
+	if version > AssemblerMaxVersion {
+		// No opcode is filtered out beyond the newest assembler version, so
+		// every higher version selects the same set. Clamping keeps a source
+		// with an out of range "#pragma version" from growing the cache.
+		version = AssemblerMaxVersion
+	}
+
+	key := toolOpcodeSetKey{version: version, mode: mode}
+	if cached, ok := toolOpcodeSets.Load(key); ok {
+		return cached.([]ToolOpcode)
 	}
 
 	names := toolOpcodeNames()
@@ -235,7 +260,9 @@ func ToolOpcodesForTools(version uint64, mode RunMode) []ToolOpcode {
 		}
 		ops = append(ops, op)
 	}
-	return ops
+
+	cached, _ := toolOpcodeSets.LoadOrStore(key, ops)
+	return cached.([]ToolOpcode)
 }
 
 // ToolOpcodeForTools returns source-level opcode metadata for one source
@@ -248,7 +275,13 @@ func ToolOpcodeForTools(name string, argCount int, mode RunMode) (ToolOpcode, bo
 	return toolOpcodeForSource(name, argCount, mode)
 }
 
-func toolOpcodeNames() []string {
+// toolOpcodeNames returns the sorted set of source mnemonics. The assembler
+// tables it reads are fixed after package init, so it is built once.
+//
+// The result is shared between callers and must be treated as read only.
+var toolOpcodeNames = sync.OnceValue(buildToolOpcodeNames)
+
+func buildToolOpcodeNames() []string {
 	seen := make(map[string]bool)
 	for name := range OpsByName[AssemblerMaxVersion] {
 		seen[name] = true
@@ -271,10 +304,59 @@ func toolOpcodeNames() []string {
 	return names
 }
 
+type toolOpcodeKey struct {
+	name     string
+	argCount int
+	mode     RunMode
+}
+
+// toolOpcodes memoizes toolOpcodeForSource, which rebuilds a mnemonic's
+// argument list and signature strings once per operation in a document.
+//
+// Only successful lookups are cached. Mnemonics come from source text, and
+// caching misses would let a document full of unknown words grow the cache
+// without bound, while every hit is a name that exists in the assembler
+// tables.
+var toolOpcodes sync.Map // toolOpcodeKey -> ToolOpcode
+
+// toolOpcodeArgCountKey collapses argument counts that select the same spec.
+// Only pseudo-ops choose a spec by immediate count, and they fall back to
+// anyImmediates for counts they do not name, so everything else shares one
+// cache entry.
+func toolOpcodeArgCountKey(name string, argCount int) int {
+	specs, ok := pseudoOps[name]
+	if !ok {
+		return anyImmediates
+	}
+	if _, ok := specs[argCount]; ok {
+		return argCount
+	}
+	return anyImmediates
+}
+
 func toolOpcodeForSource(name string, argCount int, mode RunMode) (ToolOpcode, bool) {
+	key := toolOpcodeKey{
+		name:     name,
+		argCount: toolOpcodeArgCountKey(name, argCount),
+		mode:     mode,
+	}
+	if cached, ok := toolOpcodes.Load(key); ok {
+		return cached.(ToolOpcode), true
+	}
+
+	op, ok := buildToolOpcodeForSource(name, argCount, mode)
+	if !ok {
+		return ToolOpcode{}, false
+	}
+
+	cached, _ := toolOpcodes.LoadOrStore(key, op)
+	return cached.(ToolOpcode), true
+}
+
+func buildToolOpcodeForSource(name string, argCount int, mode RunMode) (ToolOpcode, bool) {
 	if overlay, ok := toolSourceOverlays[name]; ok {
-		desc := OpDescOf(toolCanonicalName(name, argCount))
-		return toolOpcodeFromParts(name, toolCanonicalName(name, argCount), overlay.version, overlay.modes, overlay.args, desc), true
+		canonical := toolCanonicalName(name, argCount)
+		return toolOpcodeFromParts(name, canonical, overlay.version, overlay.modes, overlay.args, OpDescOf(canonical)), true
 	}
 
 	spec, ok := sourceIndexSpec(name, argCount)
@@ -526,7 +608,39 @@ func toolFieldGroupString(group ToolFieldGroup) string {
 }
 
 // ToolArgValuesForTools returns named values for a tooling argument kind.
+type toolArgValuesKey struct {
+	kind    ToolArgKind
+	group   ToolFieldGroup
+	version uint64
+	mode    RunMode
+}
+
+// toolArgValues memoizes ToolArgValuesForTools, which rebuilds and re-sorts
+// the same field tables on every argument completion.
+var toolArgValues sync.Map // toolArgValuesKey -> []ToolArgValue
+
+// ToolArgValuesForTools returns the values an argument accepts at the given
+// version and mode.
+//
+// The result is cached and shared between callers, so it must be treated as
+// read only.
 func ToolArgValuesForTools(kind ToolArgKind, group ToolFieldGroup, version uint64, mode RunMode) []ToolArgValue {
+	if version > AssemblerMaxVersion {
+		// Field tables are unchanged past the newest assembler version, so a
+		// source pinning a higher version selects the same values.
+		version = AssemblerMaxVersion
+	}
+
+	key := toolArgValuesKey{kind: kind, group: group, version: version, mode: mode}
+	if cached, ok := toolArgValues.Load(key); ok {
+		return cached.([]ToolArgValue)
+	}
+
+	cached, _ := toolArgValues.LoadOrStore(key, buildToolArgValues(kind, group, version, mode))
+	return cached.([]ToolArgValue)
+}
+
+func buildToolArgValues(kind ToolArgKind, group ToolFieldGroup, version uint64, mode RunMode) []ToolArgValue {
 	var values []ToolArgValue
 	if kind == ToolArgConstInt {
 		for name, value := range txnTypeMap {
@@ -543,7 +657,8 @@ func ToolArgValuesForTools(kind ToolArgKind, group ToolFieldGroup, version uint6
 	if kind != ToolArgField {
 		return nil
 	}
-	values = toolFieldValues(group, version, mode)
+	// toolFieldValues hands back a shared slice, so sort a copy of it.
+	values = append(values, toolFieldValues(group, version, mode)...)
 	sortToolArgValues(values)
 	return values
 }
@@ -554,7 +669,38 @@ func sortToolArgValues(values []ToolArgValue) {
 	})
 }
 
+type toolFieldValuesKey struct {
+	group   ToolFieldGroup
+	version uint64
+	mode    RunMode
+}
+
+// toolFieldValueSets memoizes toolFieldValues. Resolving the named value of a
+// field argument rebuilds the whole group table, which happens once per field
+// argument in a document.
+var toolFieldValueSets sync.Map // toolFieldValuesKey -> []ToolArgValue
+
+// toolFieldValues returns the values a field group accepts at the given
+// version and mode, in assembler table order.
+//
+// The result is cached and shared between callers, so it must be treated as
+// read only.
 func toolFieldValues(group ToolFieldGroup, version uint64, mode RunMode) []ToolArgValue {
+	if version > AssemblerMaxVersion {
+		// Field tables do not grow past the newest assembler version.
+		version = AssemblerMaxVersion
+	}
+
+	key := toolFieldValuesKey{group: group, version: version, mode: mode}
+	if cached, ok := toolFieldValueSets.Load(key); ok {
+		return cached.([]ToolArgValue)
+	}
+
+	cached, _ := toolFieldValueSets.LoadOrStore(key, buildToolFieldValues(group, version, mode))
+	return cached.([]ToolArgValue)
+}
+
+func buildToolFieldValues(group ToolFieldGroup, version uint64, mode RunMode) []ToolArgValue {
 	switch group {
 	case ToolFieldTxn:
 		return toolTxnFieldValues(version, mode, false, false)
@@ -929,11 +1075,12 @@ func sourceArgValue(arg ToolArg, text string, version uint64, mode RunMode) (Too
 	if arg.Kind != ToolArgField {
 		return ToolArgValue{}, false
 	}
+	numeric, numericErr := strconv.ParseUint(text, 0, 64)
 	for _, value := range toolFieldValues(arg.FieldGroup, version, mode) {
 		if value.Name == text {
 			return value, true
 		}
-		if numeric, err := strconv.ParseUint(text, 0, 64); err == nil && value.Value == numeric {
+		if numericErr == nil && value.Value == numeric {
 			return value, true
 		}
 	}
