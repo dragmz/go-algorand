@@ -44,6 +44,20 @@ func sourceTokenContains(token SourceToken, column int) bool {
 	return column >= token.Column && column <= token.EndColumn
 }
 
+// sourceTokenAt returns the token a byte column falls in, which is the line's
+// comment when the column is past where the code ends.
+func sourceTokenAt(line SourceLine, column int) (SourceToken, bool) {
+	for _, token := range line.Tokens {
+		if sourceTokenContains(token, column) {
+			return token, true
+		}
+	}
+	if line.Comment != nil && sourceTokenContains(*line.Comment, column) {
+		return *line.Comment, true
+	}
+	return SourceToken{}, false
+}
+
 // SourceStatement is a semicolon-delimited TEAL source statement.
 type SourceStatement struct {
 	Tokens    []SourceToken

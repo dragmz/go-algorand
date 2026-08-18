@@ -268,6 +268,18 @@ func sourceRangeFromRequiredVersion(required SourceRequiredVersion) SourceRange 
 	}
 }
 
+// sourceRangeWithin reports whether inner lies entirely within outer. An equal
+// range counts as within.
+func sourceRangeWithin(inner SourceRange, outer SourceRange) bool {
+	if inner.Line < outer.Line || inner.Line == outer.Line && inner.Column < outer.Column {
+		return false
+	}
+	if inner.EndLine > outer.EndLine || inner.EndLine == outer.EndLine && inner.EndColumn > outer.EndColumn {
+		return false
+	}
+	return true
+}
+
 func sourceRangesOverlap(a SourceRange, b SourceRange) bool {
 	if a.EndLine < b.Line || b.EndLine < a.Line {
 		return false

@@ -132,9 +132,12 @@ func FuzzSourceFeatureConversions(f *testing.F) {
 		for _, rg := range sourceDefinitions(*result, line, column) {
 			_ = sourceRangeToLSP(result.Lines, rg)
 		}
-		for _, highlight := range sourceHighlights(*result, line, column) {
-			_ = sourceHighlightToLSP(result.Lines, highlight)
+		for _, rg := range sourceOccurrences(*result, line, column, true) {
+			_ = sourceHighlightToLSP(result.Lines, rg)
 		}
+		_ = sourceLocationsToLSP("file:///fuzz.teal", result.Lines, sourceOccurrences(*result, line, column, false))
+		_ = sourceSelectionRangeToLSP(result.Lines, LspPosition{Line: line, Character: character},
+			logic.SourceSelectionRangesForTools(result.Lines, line, column))
 		for _, symbol := range sourceDocumentSymbols(*result) {
 			_ = sourceDocumentSymbolToLSP(result.Lines, symbol)
 		}

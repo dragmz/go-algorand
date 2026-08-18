@@ -134,9 +134,8 @@ func TestSourceDocumentSymbolToLSP(t *testing.T) {
 
 func TestSourceHighlightToLSP(t *testing.T) {
 	lines := logic.SourceLinesForTools("b 😀")
-	highlight := sourceHighlightToLSP(lines, sourceHighlight{
-		Range: logic.SourceRange{Line: 0, Column: len("b "), EndLine: 0, EndColumn: len("b 😀")},
-	})
+	highlight := sourceHighlightToLSP(lines,
+		logic.SourceRange{Line: 0, Column: len("b "), EndLine: 0, EndColumn: len("b 😀")})
 
 	assert.Equal(t, LspRange{
 		Start: LspPosition{Line: 0, Character: 2},
@@ -144,6 +143,54 @@ func TestSourceHighlightToLSP(t *testing.T) {
 	}, highlight.Range)
 	assert.NotNil(t, highlight.Kind)
 	assert.Equal(t, symbolHighlightKind, *highlight.Kind)
+}
+
+func TestSourceSelectionRangeToLSP(t *testing.T) {
+	lines := logic.SourceLinesForTools("int 😀")
+
+	sr := sourceSelectionRangeToLSP(lines, LspPosition{}, []logic.SourceRange{
+		{Line: 0, Column: len("int "), EndLine: 0, EndColumn: len("int 😀")},
+		{Line: 0, Column: 0, EndLine: 0, EndColumn: len("int 😀")},
+	})
+
+	// The innermost rung is the answer and the wider ones hang off it. Columns
+	// are UTF-16, so the emoji counts for two.
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0, Character: 4},
+		End:   LspPosition{Line: 0, Character: 6},
+	}, sr.Range)
+	require.NotNil(t, sr.Parent)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0, Character: 0},
+		End:   LspPosition{Line: 0, Character: 6},
+	}, sr.Parent.Range)
+	assert.Nil(t, sr.Parent.Parent)
+
+	// A position with nothing to widen still answers, because the client pairs
+	// answers with the positions it sent by index.
+	empty := sourceSelectionRangeToLSP(lines, LspPosition{Line: 9, Character: 3}, nil)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 9, Character: 3},
+		End:   LspPosition{Line: 9, Character: 3},
+	}, empty.Range)
+	assert.Nil(t, empty.Parent)
+}
+
+func TestSourceLocationsToLSP(t *testing.T) {
+	lines := logic.SourceLinesForTools("b 😀")
+
+	locations := sourceLocationsToLSP("file:///a.teal", lines, []logic.SourceRange{
+		{Line: 0, Column: len("b "), EndLine: 0, EndColumn: len("b 😀")},
+	})
+
+	require.Len(t, locations, 1)
+	assert.Equal(t, "file:///a.teal", locations[0].Uri)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 0, Character: 2},
+		End:   LspPosition{Line: 0, Character: 4},
+	}, locations[0].Range)
+
+	assert.Empty(t, sourceLocationsToLSP("file:///a.teal", lines, nil))
 }
 
 func TestSourceInlayToLSP(t *testing.T) {
@@ -234,10 +281,16 @@ func TestSourceNavigationHelpers(t *testing.T) {
 	assert.Equal(t, []logic.SourceRange{{Line: 0, EndLine: 0, EndColumn: 1}}, sourceDefinitions(result, 1, len("b ")))
 	assert.Empty(t, sourceDefinitions(result, 0, 0))
 
-	assert.Equal(t, []sourceHighlight{
-		{Range: logic.SourceRange{Line: 0, EndLine: 0, EndColumn: 1}},
-		{Range: logic.SourceRange{Line: 1, Column: len("b "), EndLine: 1, EndColumn: len("b a")}},
-	}, sourceHighlights(result, 0, 0))
+	declaration := logic.SourceRange{Line: 0, EndLine: 0, EndColumn: 1}
+	reference := logic.SourceRange{Line: 1, Column: len("b "), EndLine: 1, EndColumn: len("b a")}
+
+	// Highlighting wants the declaration, a references request only when asked.
+	assert.Equal(t, []logic.SourceRange{declaration, reference}, sourceOccurrences(result, 0, 0, true))
+	assert.Equal(t, []logic.SourceRange{reference}, sourceOccurrences(result, 0, 0, false))
+
+	// The same answer from the reference as from the declaration.
+	assert.Equal(t, []logic.SourceRange{declaration, reference}, sourceOccurrences(result, 1, len("b "), true))
+	assert.Empty(t, sourceOccurrences(result, 1, 0, true))
 
 	assert.Equal(t, []sourceDocumentSymbol{{
 		Name:           "a",

@@ -189,6 +189,47 @@ func sourceSymbolReferences(count int) string {
 	}
 }
 
+// SourceSelectionRangesForTools returns the ranges a selection at a byte-column
+// position widens through, innermost first: the token, the statement holding it,
+// and the whole line.
+//
+// Every range contains the one before it. A candidate that would not widen the
+// selection, or that the next one does not contain, is left out, so a cursor in
+// a trailing comment widens straight from the comment to the line rather than
+// through the code statement beside it.
+func SourceSelectionRangesForTools(lines []SourceLine, line int, column int) []SourceRange {
+	if line < 0 || line >= len(lines) {
+		return nil
+	}
+	source := lines[line]
+
+	var ranges []SourceRange
+	widen := func(rg SourceRange) {
+		if len(ranges) > 0 {
+			previous := ranges[len(ranges)-1]
+			if previous == rg || !sourceRangeWithin(previous, rg) {
+				return
+			}
+		}
+		ranges = append(ranges, rg)
+	}
+
+	if token, ok := sourceTokenAt(source, column); ok {
+		widen(sourceRangeFromToken(token))
+	}
+	if statement, _, ok := SourceStatementAtForTools(lines, line, column); ok && len(statement.Tokens) > 0 {
+		widen(SourceRange{
+			Line:      line,
+			Column:    statement.Column,
+			EndLine:   line,
+			EndColumn: statement.EndColumn,
+		})
+	}
+	widen(SourceRange{Line: line, EndLine: line, EndColumn: len(source.Text)})
+
+	return ranges
+}
+
 // SourceSignatureHelpForTools returns source-aware signature help at a
 // byte-column source position.
 func SourceSignatureHelpForTools(result SourceAnalysisResult, line int, column int) (SourceSignatureHelp, bool) {

@@ -288,6 +288,8 @@ type lspServerCapabilities struct {
 	DocumentHighlightProvider *bool                      `json:"documentHighlightProvider,omitempty"`
 	SemanticTokensProvider    *lspSemanticTokensProvider `json:"semanticTokensProvider,omitempty"`
 	DefinitionProvider        *bool                      `json:"definitionProvider,omitempty"`
+	ReferencesProvider        *bool                      `json:"referencesProvider,omitempty"`
+	SelectionRangeProvider    *bool                      `json:"selectionRangeProvider,omitempty"`
 	HoverProvider             *bool                      `json:"hoverProvider,omitempty"`
 	SignatureHelpProvider     *lspSignatureHelpOptions   `json:"signatureHelpProvider,omitempty"`
 	InlayHintProvider         *bool                      `json:"inlayHintProvider,omitempty"`
@@ -754,6 +756,28 @@ type lspDefinitionRequestParams struct {
 	Position     LspPosition               `json:"position"`
 }
 
+type lspReferenceContext struct {
+	IncludeDeclaration bool `json:"includeDeclaration"`
+}
+
+type lspReferencesRequestParams struct {
+	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
+	Position     LspPosition               `json:"position"`
+	Context      lspReferenceContext       `json:"context"`
+}
+
+type lspSelectionRangeRequestParams struct {
+	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
+	Positions    []LspPosition             `json:"positions"`
+}
+
+// lspSelectionRange is one rung of the ladder a selection widens through, linked
+// to the rung outside it.
+type lspSelectionRange struct {
+	Range  LspRange           `json:"range"`
+	Parent *lspSelectionRange `json:"parent,omitempty"`
+}
+
 type lspLocation struct {
 	Uri   string   `json:"uri"`
 	Range LspRange `json:"range"`
@@ -837,6 +861,8 @@ type lspSemanticTokensRangeRequest lspRequest[*lspSemanticTokensRangeRequestPara
 type lspCompletionRequest lspRequest[*lspCompletionRequestParams]
 type lspCompletionResolveRequest lspRequest[lspCompletionItem]
 type lspDefinitionRequest lspRequest[*lspDefinitionRequestParams]
+type lspReferencesRequest lspRequest[*lspReferencesRequestParams]
+type lspSelectionRangeRequest lspRequest[*lspSelectionRangeRequestParams]
 type lspHoverRequest lspRequest[*lspHoverRequestParams]
 type lspSignatureHelpRequest lspRequest[*lspSignatureHelpRequestParams]
 type lspInlayHintRequest lspRequest[*lspInlayHintRequestParams]
@@ -1295,15 +1321,44 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 		ls := []lspLocation{}
 
 		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
-			for _, rg := range sourceDefinitions(*res, req.Params.Position.Line, column) {
-				ls = append(ls, lspLocation{
-					Uri:   req.Params.TextDocument.Uri,
-					Range: sourceRangeToLSP(res.Lines, rg),
-				})
-			}
+			ls = sourceLocationsToLSP(req.Params.TextDocument.Uri, res.Lines,
+				sourceDefinitions(*res, req.Params.Position.Line, column))
 		}
 
 		return l.success(h.Id, ls)
+
+	case "textDocument/references":
+		req, err := read[lspReferencesRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		ls := []lspLocation{}
+
+		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
+			ls = sourceLocationsToLSP(req.Params.TextDocument.Uri, res.Lines,
+				sourceOccurrences(*res, req.Params.Position.Line, column, req.Params.Context.IncludeDeclaration))
+		}
+
+		return l.success(h.Id, ls)
+
+	case "textDocument/selectionRange":
+		req, err := read[lspSelectionRangeRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		srs := []lspSelectionRange{}
+
+		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
+			for _, position := range req.Params.Positions {
+				column := sourceColumn(res.Lines, position.Line, position.Character)
+				srs = append(srs, sourceSelectionRangeToLSP(res.Lines, position,
+					logic.SourceSelectionRangesForTools(res.Lines, position.Line, column)))
+			}
+		}
+
+		return l.success(h.Id, srs)
 
 	case "textDocument/signatureHelp":
 		req, err := read[lspSignatureHelpRequest](b)
@@ -1388,8 +1443,8 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 		hs := []lspDocumentHighlight{}
 
 		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
-			for _, highlight := range sourceHighlights(*res, req.Params.Position.Line, column) {
-				hs = append(hs, sourceHighlightToLSP(res.Lines, highlight))
+			for _, rg := range sourceOccurrences(*res, req.Params.Position.Line, column, true) {
+				hs = append(hs, sourceHighlightToLSP(res.Lines, rg))
 			}
 		}
 
@@ -1499,7 +1554,10 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 					TriggerCharacters: []string{" "},
 					ResolveProvider:   capabilitySupported,
 				},
-				DefinitionProvider:    capabilitySupported,
+				DefinitionProvider:     capabilitySupported,
+				ReferencesProvider:     capabilitySupported,
+				SelectionRangeProvider: capabilitySupported,
+
 				HoverProvider:         capabilitySupported,
 				SignatureHelpProvider: &lspSignatureHelpOptions{},
 				InlayHintProvider:     inlayHint,
@@ -1550,10 +1608,6 @@ type sourcePrepareRenameResult struct {
 	Placeholder string
 }
 
-type sourceHighlight struct {
-	Range logic.SourceRange
-}
-
 type sourceDocumentSymbol struct {
 	Name           string
 	Range          logic.SourceRange
@@ -1595,19 +1649,33 @@ func sourceDefinitions(result logic.SourceAnalysisResult, line int, column int) 
 	return ranges
 }
 
-func sourceHighlights(result logic.SourceAnalysisResult, line int, column int) []sourceHighlight {
+// sourceOccurrences returns every place the identifier at a position appears, in
+// source order. Highlighting wants the declarations along with the references,
+// while a references request only wants them when the client asks, so the caller
+// says which it needs.
+func sourceOccurrences(result logic.SourceAnalysisResult, line int, column int, withDeclarations bool) []logic.SourceRange {
 	identifier, ok := logic.SourceIdentifierAtForTools(result.Index, line, column)
 	if !ok {
 		return nil
 	}
-	var highlights []sourceHighlight
-	for _, symbol := range logic.SourceSymbolsByNameForTools(result.Index, identifier.Name) {
-		highlights = append(highlights, sourceHighlight{Range: logic.SourceSymbolNameRangeForTools(symbol)})
+
+	var ranges []logic.SourceRange
+	if withDeclarations {
+		for _, symbol := range logic.SourceSymbolsByNameForTools(result.Index, identifier.Name) {
+			ranges = append(ranges, logic.SourceSymbolNameRangeForTools(symbol))
+		}
 	}
 	for _, ref := range logic.SourceReferencesByNameForTools(result.Index, identifier.Name) {
-		highlights = append(highlights, sourceHighlight{Range: logic.SourceReferenceRangeForTools(ref)})
+		ranges = append(ranges, logic.SourceReferenceRangeForTools(ref))
 	}
-	return highlights
+
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].Line != ranges[j].Line {
+			return ranges[i].Line < ranges[j].Line
+		}
+		return ranges[i].Column < ranges[j].Column
+	})
+	return ranges
 }
 
 func sourceDocumentSymbols(result logic.SourceAnalysisResult) []sourceDocumentSymbol {
@@ -2122,11 +2190,43 @@ func sourceDocumentSymbolToLSP(lines []logic.SourceLine, symbol sourceDocumentSy
 	}
 }
 
-func sourceHighlightToLSP(lines []logic.SourceLine, highlight sourceHighlight) lspDocumentHighlight {
+func sourceHighlightToLSP(lines []logic.SourceLine, rg logic.SourceRange) lspDocumentHighlight {
 	return lspDocumentHighlight{
-		Range: sourceRangeToLSP(lines, highlight.Range),
+		Range: sourceRangeToLSP(lines, rg),
 		Kind:  &symbolHighlightKind,
 	}
+}
+
+// sourceSelectionRangeToLSP links a ladder of nested ranges, innermost first,
+// into the chain of parents the protocol expects. A position with no ranges at
+// all still answers with an empty range at that position, because the client
+// pairs the answers with the positions it sent by index.
+func sourceSelectionRangeToLSP(lines []logic.SourceLine, position LspPosition, ranges []logic.SourceRange) lspSelectionRange {
+	if len(ranges) == 0 {
+		return lspSelectionRange{Range: LspRange{Start: position, End: position}}
+	}
+
+	var parent *lspSelectionRange
+	for i := len(ranges) - 1; i >= 0; i-- {
+		parent = &lspSelectionRange{
+			Range:  sourceRangeToLSP(lines, ranges[i]),
+			Parent: parent,
+		}
+	}
+	return *parent
+}
+
+// sourceLocationsToLSP turns ranges in one document into LSP locations, which is
+// the answer shape of every request that points somewhere in the open file.
+func sourceLocationsToLSP(uri string, lines []logic.SourceLine, ranges []logic.SourceRange) []lspLocation {
+	locations := make([]lspLocation, 0, len(ranges))
+	for _, rg := range ranges {
+		locations = append(locations, lspLocation{
+			Uri:   uri,
+			Range: sourceRangeToLSP(lines, rg),
+		})
+	}
+	return locations
 }
 
 var symbolHighlightKind = 1

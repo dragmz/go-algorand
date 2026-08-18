@@ -134,6 +134,23 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"position":     map[string]any{"line": 5, "character": len("  b ")},
 		}),
+		protocolRequest("references", "textDocument/references", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 2, "character": 0},
+			"context":      map[string]any{"includeDeclaration": true},
+		}),
+		protocolRequest("references-only", "textDocument/references", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"position":     map[string]any{"line": 5, "character": len("  b ")},
+			"context":      map[string]any{"includeDeclaration": false},
+		}),
+		protocolRequest("selection", "textDocument/selectionRange", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"positions": []any{
+				map[string]any{"line": 3, "character": len("  txn Se")},
+				map[string]any{"line": 8, "character": 0},
+			},
+		}),
 		protocolRequest("prepare-rename", "textDocument/prepareRename", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"position":     map[string]any{"line": 2, "character": 0},
@@ -239,6 +256,50 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 	require.Len(t, definitions, 1)
 	assert.Equal(t, protocolTestURI, definitions[0].Uri)
 
+	// Asked at the declaration, references answers with the declaration and the
+	// one branch that names it, in source order.
+	references := protocolResultAs[[]lspLocation](t, protocolResponseByID(t, frames, "references"))
+	require.Len(t, references, 2)
+	assert.Equal(t, protocolTestURI, references[0].Uri)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 2, Character: 0},
+		End:   LspPosition{Line: 2, Character: len("start")},
+	}, references[0].Range)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 5, Character: len("  b ")},
+		End:   LspPosition{Line: 5, Character: len("  b start")},
+	}, references[1].Range)
+
+	// Asked at the branch, with the declaration excluded, only the branch is left.
+	referencesOnly := protocolResultAs[[]lspLocation](t, protocolResponseByID(t, frames, "references-only"))
+	require.Len(t, referencesOnly, 1)
+	assert.Equal(t, references[1].Range, referencesOnly[0].Range)
+
+	selections := protocolResultAs[[]lspSelectionRange](t, protocolResponseByID(t, frames, "selection"))
+	require.Len(t, selections, 2)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 3, Character: len("  txn ")},
+		End:   LspPosition{Line: 3, Character: len("  txn Sender")},
+	}, selections[0].Range)
+	require.NotNil(t, selections[0].Parent)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 3, Character: len("  ")},
+		End:   LspPosition{Line: 3, Character: len("  txn Sender")},
+	}, selections[0].Parent.Range)
+	require.NotNil(t, selections[0].Parent.Parent)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 3, Character: 0},
+		End:   LspPosition{Line: 3, Character: len("  txn Sender")},
+	}, selections[0].Parent.Parent.Range)
+	assert.Nil(t, selections[0].Parent.Parent.Parent)
+
+	// A blank line answers with itself, so the array lines up with the positions.
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 8, Character: 0},
+		End:   LspPosition{Line: 8, Character: 0},
+	}, selections[1].Range)
+	assert.Nil(t, selections[1].Parent)
+
 	prepareRename := protocolResultAs[lspPrepareRenameResponse](t, protocolResponseByID(t, frames, "prepare-rename"))
 	assert.Equal(t, "start", prepareRename.Placeholder)
 
@@ -317,6 +378,10 @@ func TestProtocolCapabilitiesAdvertiseTestedOperations(t *testing.T) {
 	assert.True(t, *init.Capabilities.CompletionProvider.ResolveProvider)
 	assert.NotNil(t, init.Capabilities.DefinitionProvider)
 	assert.True(t, *init.Capabilities.DefinitionProvider)
+	require.NotNil(t, init.Capabilities.ReferencesProvider)
+	assert.True(t, *init.Capabilities.ReferencesProvider)
+	require.NotNil(t, init.Capabilities.SelectionRangeProvider)
+	assert.True(t, *init.Capabilities.SelectionRangeProvider)
 	assert.NotNil(t, init.Capabilities.HoverProvider)
 	assert.True(t, *init.Capabilities.HoverProvider)
 	assert.NotNil(t, init.Capabilities.SignatureHelpProvider)
