@@ -55,6 +55,13 @@ type lsp struct {
 	docs     map[string]*lspDoc
 	shutdown bool
 
+	// completionDocs holds the documentation of the last completion list, keyed
+	// by label, for completionItem/resolve to hand back one item at a time. A
+	// resolve always follows the completion that offered the item, and the
+	// server is single threaded, so one list is enough. A label the map does not
+	// know simply resolves to an item without documentation.
+	completionDocs map[string]string
+
 	exit     bool
 	exitCode int
 
@@ -732,6 +739,11 @@ type lspSemanticTokensFullRequestParams struct {
 	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
 }
 
+type lspSemanticTokensRangeRequestParams struct {
+	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
+	Range        LspRange                  `json:"range"`
+}
+
 type lspCompletionRequestParams struct {
 	TextDocument lspTextDocumentIdentifier `json:"textDocument"`
 	Position     LspPosition               `json:"position"`
@@ -821,7 +833,9 @@ type lspDocumentColorRequest lspRequest[*lspDocumentColorRequestParams]
 type lspDidCloseRequest lspRequest[*lspDidCloseRequestParams]
 type lspDocumentHighlightRequest lspRequest[*lspDocumentHighlightRequestParams]
 type lspSemanticTokensFullRequest lspRequest[*lspSemanticTokensFullRequestParams]
+type lspSemanticTokensRangeRequest lspRequest[*lspSemanticTokensRangeRequestParams]
 type lspCompletionRequest lspRequest[*lspCompletionRequestParams]
+type lspCompletionResolveRequest lspRequest[lspCompletionItem]
 type lspDefinitionRequest lspRequest[*lspDefinitionRequestParams]
 type lspHoverRequest lspRequest[*lspHoverRequestParams]
 type lspSignatureHelpRequest lspRequest[*lspSignatureHelpRequestParams]
@@ -942,6 +956,21 @@ func (l *lsp) results(id interface{}, uri string) (*logic.SourceAnalysisResult, 
 	}
 
 	return doc.Results(), true, nil
+}
+
+// semanticTokens answers a semantic token request over the lines in rg, which is
+// the whole document for the full request and the viewport for the range one.
+func (l *lsp) semanticTokens(id interface{}, uri string, rg logic.SourceLineRange) error {
+	st := SemanticTokens{}
+	if res, ok := l.source(uri); ok {
+		for _, token := range logic.SourceSemanticTokensForTools(*res, rg) {
+			st = append(st, sourceSemanticTokenToLSP(res.Lines, token))
+		}
+	}
+
+	return l.success(id, lspSemanticTokens{
+		Data: st.Encode(),
+	})
 }
 
 // applyEdit asks the client to apply edits to one document, then answers the
@@ -1180,10 +1209,8 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 		var cls []LspCodeLens
 
 		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
-			for _, lens := range sourceCodeLenses(*res) {
-				if sourceCodeLensEnabled(l.config, lens) {
-					cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
-				}
+			for _, lens := range sourceCodeLenses(*res, l.config) {
+				cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
 			}
 		}
 
@@ -1198,10 +1225,8 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 		ihs := []LspInlayHint{}
 
 		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
-			for _, inlay := range sourceInlays(*res) {
-				if sourceInlayEnabled(l.config, inlay) && sourceInlayInRange(res.Lines, inlay, req.Params.Range) {
-					ihs = append(ihs, sourceInlayToLSP(res.Lines, inlay))
-				}
+			for _, inlay := range sourceInlays(*res, l.config, sourceLineRangeFromLSP(req.Params.Range)) {
+				ihs = append(ihs, sourceInlayToLSP(res.Lines, inlay))
 			}
 		}
 		return l.success(h.Id, ihs)
@@ -1212,9 +1237,12 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
 		}
 		ccs := []lspCompletionItem{}
+		l.completionDocs = nil
 
 		if res, column, ok := l.sourceAt(req.Params.TextDocument.Uri, req.Params.Position); ok {
-			ccs = sourceCompletionsAtToLSP(*res, req.Params.Position.Line, column)
+			completions := sourceCompletionsAtToLSP(*res, req.Params.Position.Line, column)
+			ccs = completions.Items
+			l.completionDocs = completions.Docs
 		}
 
 		if len(ccs) == 0 {
@@ -1224,6 +1252,19 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 		}
 
 		return l.success(h.Id, ccs)
+
+	case "completionItem/resolve":
+		req, err := read[lspCompletionResolveRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		item := req.Params
+		if docs, ok := l.completionDocs[item.Label]; ok {
+			item.Documentation = markdownContent(docs)
+		}
+
+		return l.success(h.Id, item)
 
 	case "textDocument/hover":
 		req, err := read[lspHoverRequest](b)
@@ -1373,18 +1414,15 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 			return l.failf(h.Id, ErrorCodeParseError, "failed to read semantic tokens full request: %s", err)
 		}
 
-		st := SemanticTokens{}
-		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
-			for _, token := range logic.SourceSemanticTokensForTools(*res) {
-				st = append(st, sourceSemanticTokenToLSP(res.Lines, token))
-			}
+		return l.semanticTokens(h.Id, req.Params.TextDocument.Uri, logic.SourceAllLines)
+
+	case "textDocument/semanticTokens/range":
+		req, err := read[lspSemanticTokensRangeRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read semantic tokens range request: %s", err)
 		}
 
-		data := st.Encode()
-
-		return l.success(h.Id, lspSemanticTokens{
-			Data: data,
-		})
+		return l.semanticTokens(h.Id, req.Params.TextDocument.Uri, sourceLineRangeFromLSP(req.Params.Range))
 
 	case "initialize":
 		req, err := read[lspInitializeRequest](b)
@@ -1418,40 +1456,14 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 			}
 		}
 
-		sync := new(int)
-		*sync = 1
-
-		definition := new(bool)
-		*definition = true
-
-		symbol := new(bool)
-		*symbol = true
-
-		action := new(bool)
-		*action = true
-
-		rename := new(bool)
-		*rename = true
-
-		highlight := new(bool)
-		*highlight = true
-
-		fullSemantic := new(bool)
-		*fullSemantic = true
-
-		hover := new(bool)
-		*hover = true
-
-		inlayHint := new(bool)
-		if l.config.InlayNamed || l.config.InlayDecoded {
-			*inlayHint = true
-		}
+		inlayHint := boolPtr(l.config.InlayNamed || l.config.InlayDecoded)
 
 		var semanticTokensProvider *lspSemanticTokensProvider
 
 		if l.config.SemanticTokens {
 			semanticTokensProvider = &lspSemanticTokensProvider{
-				Full: fullSemantic,
+				Full:  capabilitySupported,
+				Range: capabilitySupported,
 				Legend: lspSemanticTokensLegend{
 					TokenTypes:     []string{"keyword", "string", "comment", "method", "macro", "value", "number", "operator", "function"},
 					TokenModifiers: []string{},
@@ -1461,11 +1473,11 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 
 		return l.success(h.Id, lspInitializeResult{
 			Capabilities: &lspServerCapabilities{
-				TextDocumentSync:          sync,
-				DocumentHighlightProvider: highlight,
+				TextDocumentSync:          textDocumentSyncFull,
+				DocumentHighlightProvider: capabilitySupported,
 				DiagnosticProvider:        &lspDiagnosticProvider{},
-				DocumentSymbolProvider:    symbol,
-				CodeActionProvider:        action,
+				DocumentSymbolProvider:    capabilitySupported,
+				CodeActionProvider:        capabilitySupported,
 				ExecuteCommandProvider: &lspExecuteCommandProvider{
 					Commands: []string{
 						"teal.sourcemap.generate",
@@ -1479,15 +1491,16 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 					},
 				},
 				RenameProvider: &lspRenameOptions{
-					PrepareProvider:  rename,
-					WorkDoneProgress: rename,
+					PrepareProvider:  capabilitySupported,
+					WorkDoneProgress: capabilitySupported,
 				},
 				SemanticTokensProvider: semanticTokensProvider,
 				CompletionProvider: &lspCompletionProvider{
 					TriggerCharacters: []string{" "},
+					ResolveProvider:   capabilitySupported,
 				},
-				DefinitionProvider:    definition,
-				HoverProvider:         hover,
+				DefinitionProvider:    capabilitySupported,
+				HoverProvider:         capabilitySupported,
 				SignatureHelpProvider: &lspSignatureHelpOptions{},
 				InlayHintProvider:     inlayHint,
 				CodeLensProvider:      &lspCodeLensProvider{},
@@ -1612,80 +1625,105 @@ func sourceDocumentSymbols(result logic.SourceAnalysisResult) []sourceDocumentSy
 	return symbols
 }
 
-func sourceCodeLenses(result logic.SourceAnalysisResult) []sourceCodeLens {
+// sourceCodeLenses builds the lenses the configuration asks for. A kind that is
+// switched off is never built, which keeps a whole document's worth of program
+// counter lenses out of a request that would only discard them.
+func sourceCodeLenses(result logic.SourceAnalysisResult, config tealConfig) []sourceCodeLens {
 	var lenses []sourceCodeLens
 
 	// The assembled size is only known for a program that assembles, and it
 	// describes the whole document rather than any one line, so it sits at the
 	// top of the file.
-	if result.Err == nil && result.OpStream != nil {
+	if config.ProgramSize && result.Err == nil && result.OpStream != nil {
 		lenses = append(lenses, sourceCodeLens{
 			Kind:        sourceCodeLensProgramSize,
 			ProgramSize: len(result.OpStream.Program),
 		})
 	}
 
-	for _, symbol := range result.Index.Symbols {
-		count := result.Index.RefCounts[symbol.Name]
-		if count == 0 {
-			continue
+	if config.LensRefs {
+		for _, symbol := range result.Index.Symbols {
+			count := result.Index.RefCounts[symbol.Name]
+			if count == 0 {
+				continue
+			}
+			lenses = append(lenses, sourceCodeLens{
+				Kind: sourceCodeLensReferenceCount,
+				Range: logic.SourceRange{
+					Line:    symbol.Line,
+					EndLine: symbol.Line,
+				},
+				ReferenceCount: count,
+			})
 		}
-		lenses = append(lenses, sourceCodeLens{
-			Kind: sourceCodeLensReferenceCount,
-			Range: logic.SourceRange{
-				Line:    symbol.Line,
-				EndLine: symbol.Line,
-			},
-			ReferenceCount: count,
-		})
 	}
 
-	for _, pc := range sourceProgramCounters(result) {
-		loc := result.OpStream.OffsetToSource[pc]
-		lenses = append(lenses, sourceCodeLens{
-			Kind:           sourceCodeLensProgramCounter,
-			Range:          sourceRangeFromLocation(loc),
-			ProgramCounter: pc,
-		})
+	if config.PcLens {
+		for _, pc := range sourceProgramCounters(result) {
+			loc := result.OpStream.OffsetToSource[pc]
+			lenses = append(lenses, sourceCodeLens{
+				Kind:           sourceCodeLensProgramCounter,
+				Range:          sourceRangeFromLocation(loc),
+				ProgramCounter: pc,
+			})
+		}
 	}
 
 	return lenses
 }
 
-func sourceInlays(result logic.SourceAnalysisResult) []sourceInlay {
+// sourceInlays builds the inlays the configuration asks for, for the lines in
+// rg. A kind that is switched off and a line outside the requested range are
+// never built, so answering a viewport costs the viewport rather than the
+// document.
+func sourceInlays(result logic.SourceAnalysisResult, config tealConfig, rg logic.SourceLineRange) []sourceInlay {
 	var inlays []sourceInlay
 
-	for _, hint := range logic.SourceInlayHintsForTools(result.Lines, result.Program) {
-		inlay := sourceInlay{
-			Position: logic.SourcePosition{
-				Line:   hint.Token.Line,
-				Column: hint.Token.EndColumn,
-			},
-			Range: sourceRangeFromToken(hint.Token),
-			Label: hint.Label,
+	if config.InlayNamed || config.InlayDecoded {
+		for _, hint := range logic.SourceInlayHintsForTools(result.Lines, result.Program, rg) {
+			var kind sourceInlayKind
+			switch hint.Kind {
+			case logic.SourceInlayHintNamed:
+				if !config.InlayNamed {
+					continue
+				}
+				kind = sourceInlayNamedValue
+			case logic.SourceInlayHintDecoded:
+				if !config.InlayDecoded {
+					continue
+				}
+				kind = sourceInlayDecodedValue
+			default:
+				continue
+			}
+			inlays = append(inlays, sourceInlay{
+				Kind: kind,
+				Position: logic.SourcePosition{
+					Line:   hint.Token.Line,
+					Column: hint.Token.EndColumn,
+				},
+				Range: sourceRangeFromToken(hint.Token),
+				Label: hint.Label,
+			})
 		}
-		switch hint.Kind {
-		case logic.SourceInlayHintNamed:
-			inlay.Kind = sourceInlayNamedValue
-		case logic.SourceInlayHintDecoded:
-			inlay.Kind = sourceInlayDecodedValue
-		default:
-			continue
-		}
-		inlays = append(inlays, inlay)
 	}
 
-	for _, pc := range sourceProgramCounters(result) {
-		loc := result.OpStream.OffsetToSource[pc]
-		inlays = append(inlays, sourceInlay{
-			Kind: sourceInlayProgramCounter,
-			Position: logic.SourcePosition{
-				Line:   loc.Line,
-				Column: loc.Column,
-			},
-			Range:          sourceRangeFromLocation(loc),
-			ProgramCounter: pc,
-		})
+	if config.PcInlay {
+		for _, pc := range sourceProgramCounters(result) {
+			loc := result.OpStream.OffsetToSource[pc]
+			if !rg.Contains(loc.Line) {
+				continue
+			}
+			inlays = append(inlays, sourceInlay{
+				Kind: sourceInlayProgramCounter,
+				Position: logic.SourcePosition{
+					Line:   loc.Line,
+					Column: loc.Column,
+				},
+				Range:          sourceRangeFromLocation(loc),
+				ProgramCounter: pc,
+			})
+		}
 	}
 
 	return inlays
@@ -1731,19 +1769,6 @@ func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.Source
 	}
 }
 
-func sourceCodeLensEnabled(config tealConfig, lens sourceCodeLens) bool {
-	switch lens.Kind {
-	case sourceCodeLensReferenceCount:
-		return config.LensRefs
-	case sourceCodeLensProgramCounter:
-		return config.PcLens
-	case sourceCodeLensProgramSize:
-		return config.ProgramSize
-	default:
-		return false
-	}
-}
-
 func sourceCodeLensToLSP(lines []logic.SourceLine, lens sourceCodeLens) LspCodeLens {
 	title := ""
 	switch lens.Kind {
@@ -1763,21 +1788,14 @@ func sourceCodeLensToLSP(lines []logic.SourceLine, lens sourceCodeLens) LspCodeL
 	}
 }
 
-func sourceInlayEnabled(config tealConfig, inlay sourceInlay) bool {
-	switch inlay.Kind {
-	case sourceInlayNamedValue:
-		return config.InlayNamed
-	case sourceInlayDecodedValue:
-		return config.InlayDecoded
-	case sourceInlayProgramCounter:
-		return config.PcInlay
-	default:
-		return false
+// sourceLineRangeFromLSP narrows an LSP range to the lines it touches. The end
+// line is included, because a range ending at its first character still covers
+// what that line shows.
+func sourceLineRangeFromLSP(rg LspRange) logic.SourceLineRange {
+	return logic.SourceLineRange{
+		Start: rg.Start.Line,
+		End:   rg.End.Line + 1,
 	}
-}
-
-func sourceInlayInRange(lines []logic.SourceLine, inlay sourceInlay, rg LspRange) bool {
-	return Overlaps(sourceRangeToLSP(lines, inlay.Range), rg)
 }
 
 // Constant LSP enum values shared by every response. Nothing writes through
@@ -1788,6 +1806,12 @@ var (
 	insertTextFormatSnippet = intPtr(2)
 	inlayKindParameter      = intPtr(2)
 	inlayPaddingLeft        = boolPtr(true)
+
+	// capabilitySupported marks a server capability the server always provides.
+	capabilitySupported = boolPtr(true)
+	// textDocumentSyncFull is TextDocumentSyncKind.Full, which is how the server
+	// receives document changes.
+	textDocumentSyncFull = intPtr(1)
 )
 
 func intPtr(v int) *int { return &v }
@@ -1815,19 +1839,32 @@ func sourceInlayToLSP(lines []logic.SourceLine, inlay sourceInlay) LspInlayHint 
 	return hint
 }
 
-func sourceCompletionsAtToLSP(result logic.SourceAnalysisResult, line int, column int) []lspCompletionItem {
-	completions := sourceCompletionsToLSP(logic.SourceCompletionsForTools(result, line, column))
-	ctx := logic.SourceCompletionContextForTools(result.Lines, result.Program, line, column)
-	if ctx.Mode == logic.SourceCompletionOpcode {
-		completions = append(sourceSnippetCompletionsToLSP(), completions...)
-	}
-	return completions
+// sourceCompletions is a completion list together with the documentation held
+// back from it, keyed by label. Documentation is the bulk of a completion
+// response and the client displays at most one item's worth, so it travels
+// separately and is handed out by completionItem/resolve.
+type sourceCompletions struct {
+	Items []lspCompletionItem
+	Docs  map[string]string
 }
 
-func sourceCompletionsToLSP(items []logic.SourceCompletionItem) []lspCompletionItem {
-	completions := make([]lspCompletionItem, 0, len(items))
+func sourceCompletionsAtToLSP(result logic.SourceAnalysisResult, line int, column int) sourceCompletions {
+	items := logic.SourceCompletionsForTools(result, line, column)
+
+	completions := sourceCompletions{
+		Items: make([]lspCompletionItem, 0, len(items)),
+		Docs:  make(map[string]string, len(items)),
+	}
 	for _, item := range items {
-		completions = append(completions, sourceCompletionToLSP(item))
+		completions.Items = append(completions.Items, sourceCompletionToLSP(item))
+		if item.Docs != "" {
+			completions.Docs[item.Label] = item.Docs
+		}
+	}
+
+	ctx := logic.SourceCompletionContextForTools(result.Lines, result.Program, line, column)
+	if ctx.Mode == logic.SourceCompletionOpcode {
+		completions.Items = append(sourceSnippetCompletionsToLSP(), completions.Items...)
 	}
 	return completions
 }
@@ -1867,7 +1904,6 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 		}
 		return lspCompletionItem{
 			Label:            item.Label,
-			Documentation:    markdownContent(item.Docs),
 			Kind:             operator,
 			InsertText:       insert,
 			InsertTextFormat: format,
@@ -1888,9 +1924,8 @@ func sourceCompletionToLSP(item logic.SourceCompletionItem) lspCompletionItem {
 			}
 		}
 		return lspCompletionItem{
-			LabelDetails:  details,
-			Label:         item.Label,
-			Documentation: markdownContent(item.Docs),
+			LabelDetails: details,
+			Label:        item.Label,
 		}
 	}
 }

@@ -16,6 +16,8 @@
 
 package logic
 
+import "math"
+
 // SourceTokenKind classifies tokens returned by SourceLinesForTools.
 type SourceTokenKind int
 
@@ -63,6 +65,23 @@ type SourceLine struct {
 type SourcePosition struct {
 	Line   int
 	Column int
+}
+
+// SourceLineRange is a half-open span of zero-based source lines. Tooling that
+// answers about part of a document passes one so that the parts outside it are
+// never built in the first place.
+type SourceLineRange struct {
+	Start int
+	End   int
+}
+
+// SourceAllLines spans a whole document, and is what a caller asking about
+// everything passes.
+var SourceAllLines = SourceLineRange{Start: 0, End: math.MaxInt}
+
+// Contains reports whether a line falls inside the span.
+func (rg SourceLineRange) Contains(line int) bool {
+	return line >= rg.Start && line < rg.End
 }
 
 // SourceLinesForTools tokenizes TEAL source using assembler source rules while

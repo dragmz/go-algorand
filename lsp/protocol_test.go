@@ -108,6 +108,8 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"position":     map[string]any{"line": 8, "character": 0},
 		}),
+		protocolRequest("resolve", "completionItem/resolve", map[string]any{"label": "txn"}),
+		protocolRequest("resolve-unknown", "completionItem/resolve", map[string]any{"label": "nosuchopcode"}),
 		protocolRequest("completion-arg", "textDocument/completion", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"position":     map[string]any{"line": 3, "character": len("  txn ")},
@@ -151,6 +153,10 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 		protocolRequest("tokens", "textDocument/semanticTokens/full", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 		}),
+		protocolRequest("tokens-range", "textDocument/semanticTokens/range", map[string]any{
+			"textDocument": map[string]any{"uri": protocolTestURI},
+			"range":        protocolRange(2, 0, 3, 0),
+		}),
 		protocolRequest("actions", "textDocument/codeAction", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"range":        protocolRange(6, 0, 6, len("unused:")),
@@ -182,6 +188,23 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 	assert.Contains(t, opLabels, "soc")
 	assert.Contains(t, opLabels, "func")
 	assert.Contains(t, opLabels, "txn")
+
+	// Documentation is the bulk of a completion list and travels only on resolve.
+	for _, item := range opCompletions {
+		assert.Nil(t, item.Documentation, "item %q carries documentation", item.Label)
+	}
+
+	resolved := protocolResultAs[lspCompletionItem](t, protocolResponseByID(t, frames, "resolve"))
+	assert.Equal(t, "txn", resolved.Label)
+	docs, ok := resolved.Documentation.(map[string]any)
+	require.True(t, ok, "documentation: %#v", resolved.Documentation)
+	assert.Equal(t, "markdown", docs["kind"])
+	assert.NotEmpty(t, docs["value"])
+
+	// An item the last list never offered resolves to itself, unchanged.
+	unknown := protocolResultAs[lspCompletionItem](t, protocolResponseByID(t, frames, "resolve-unknown"))
+	assert.Equal(t, "nosuchopcode", unknown.Label)
+	assert.Nil(t, unknown.Documentation)
 
 	argCompletions := protocolResultAs[[]lspCompletionItem](t, protocolResponseByID(t, frames, "completion-arg"))
 	assert.Contains(t, protocolCompletionLabels(argCompletions), "Sender")
@@ -235,6 +258,12 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 	require.NotEmpty(t, tokens.Data)
 	assert.Zero(t, len(tokens.Data)%5)
 
+	// A range answers with the tokens of the lines it spans and nothing else.
+	tokensRange := protocolResultAs[lspSemanticTokens](t, protocolResponseByID(t, frames, "tokens-range"))
+	require.NotEmpty(t, tokensRange.Data)
+	assert.Zero(t, len(tokensRange.Data)%5)
+	assert.Less(t, len(tokensRange.Data), len(tokens.Data))
+
 	actions := protocolResultAs[[]lspCodeAction](t, protocolResponseByID(t, frames, "actions"))
 	require.NotEmpty(t, actions)
 	assert.Contains(t, protocolCodeActionTitles(actions), "Remove label 'unused'")
@@ -279,7 +308,13 @@ func TestProtocolCapabilitiesAdvertiseTestedOperations(t *testing.T) {
 	assert.True(t, *init.Capabilities.RenameProvider.PrepareProvider)
 	assert.NotNil(t, init.Capabilities.DocumentHighlightProvider)
 	assert.True(t, *init.Capabilities.DocumentHighlightProvider)
-	assert.NotNil(t, init.Capabilities.SemanticTokensProvider)
+	require.NotNil(t, init.Capabilities.SemanticTokensProvider)
+	require.NotNil(t, init.Capabilities.SemanticTokensProvider.Full)
+	assert.True(t, *init.Capabilities.SemanticTokensProvider.Full)
+	require.NotNil(t, init.Capabilities.SemanticTokensProvider.Range)
+	assert.True(t, *init.Capabilities.SemanticTokensProvider.Range)
+	require.NotNil(t, init.Capabilities.CompletionProvider.ResolveProvider)
+	assert.True(t, *init.Capabilities.CompletionProvider.ResolveProvider)
 	assert.NotNil(t, init.Capabilities.DefinitionProvider)
 	assert.True(t, *init.Capabilities.DefinitionProvider)
 	assert.NotNil(t, init.Capabilities.HoverProvider)

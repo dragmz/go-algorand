@@ -138,13 +138,23 @@ func FuzzSourceFeatureConversions(f *testing.F) {
 		for _, symbol := range sourceDocumentSymbols(*result) {
 			_ = sourceDocumentSymbolToLSP(result.Lines, symbol)
 		}
-		for _, token := range logic.SourceSemanticTokensForTools(*result) {
+		for _, token := range logic.SourceSemanticTokensForTools(*result, logic.SourceAllLines) {
 			_ = sourceSemanticTokenToLSP(result.Lines, token)
 		}
-		for _, lens := range sourceCodeLenses(*result) {
+		for _, lens := range sourceCodeLenses(*result, allAnnotationsForTest) {
 			_ = sourceCodeLensToLSP(result.Lines, lens)
 		}
-		for _, inlay := range sourceInlays(*result) {
+
+		// The range-scoped paths have to survive whatever position the fuzzer
+		// lands on, including one past the end of the document.
+		viewport := sourceLineRangeFromLSP(LspRange{
+			Start: LspPosition{Line: line},
+			End:   LspPosition{Line: line, Character: character},
+		})
+		for _, token := range logic.SourceSemanticTokensForTools(*result, viewport) {
+			_ = sourceSemanticTokenToLSP(result.Lines, token)
+		}
+		for _, inlay := range sourceInlays(*result, allAnnotationsForTest, viewport) {
 			_ = sourceInlayToLSP(result.Lines, inlay)
 		}
 

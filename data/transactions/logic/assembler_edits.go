@@ -193,7 +193,7 @@ func SourceActionsForTools(lines []SourceLine, idx SourceIndex, program SourcePr
 		})
 	}
 
-	for _, hint := range SourceInlayHintsForTools(lines, program) {
+	for _, hint := range SourceInlayHintsForTools(lines, program, SourceLineRange{Start: rg.Line, End: rg.EndLine + 1}) {
 		if !sourceRangesOverlap(rg, sourceRangeFromToken(hint.Token)) {
 			continue
 		}

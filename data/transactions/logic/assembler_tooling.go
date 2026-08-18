@@ -832,13 +832,14 @@ func SourceCompletionContextForTools(lines []SourceLine, program SourceProgram, 
 	}
 }
 
-// SourceInlayHintsForTools returns assembler-native inlay hints.
-func SourceInlayHintsForTools(lines []SourceLine, program SourceProgram) []SourceInlayHint {
+// SourceInlayHintsForTools returns assembler-native inlay hints for the lines in
+// rg. Pass SourceAllLines for a whole document.
+func SourceInlayHintsForTools(lines []SourceLine, program SourceProgram, rg SourceLineRange) []SourceInlayHint {
 	var hints []SourceInlayHint
 	seenDecoded := make(map[SourceToken]bool)
 	for _, op := range program.Operations {
 		for _, arg := range op.Args {
-			if arg.Token.Line < 0 || arg.Token.Line >= len(lines) {
+			if arg.Token.Line < 0 || arg.Token.Line >= len(lines) || !rg.Contains(arg.Token.Line) {
 				continue
 			}
 			if arg.HasValue && arg.ValueName != "" && arg.Token.Text != arg.ValueName {
@@ -859,6 +860,9 @@ func SourceInlayHintsForTools(lines []SourceLine, program SourceProgram) []Sourc
 		}
 	}
 	for _, line := range lines {
+		if !rg.Contains(line.Line) {
+			continue
+		}
 		for _, token := range line.Tokens {
 			if seenDecoded[token] {
 				continue

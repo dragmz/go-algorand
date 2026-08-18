@@ -31,7 +31,7 @@ txn Sender
 int 1 // comment
 byte base64`, SourceToolOptions{Mode: ModeApp})
 
-	tokens := SourceSemanticTokensForTools(result)
+	tokens := SourceSemanticTokensForTools(result, SourceAllLines)
 	requireSemanticToken(t, tokens, SourceSemanticMacro, 0, 0, len("#pragma"))
 	requireSemanticToken(t, tokens, SourceSemanticBool, 1, len("#pragma typetrack "), len("#pragma typetrack true"))
 	requireSemanticToken(t, tokens, SourceSemanticSymbol, 2, 0, len("label:"))
@@ -47,9 +47,30 @@ func TestSourceSemanticTokensForToolsEmojiRanges(t *testing.T) {
 	name := "👍"
 	result := AnalyzeSourceForToolsWithOptions(name+":\nb "+name, SourceToolOptions{Mode: ModeApp})
 
-	tokens := SourceSemanticTokensForTools(result)
+	tokens := SourceSemanticTokensForTools(result, SourceAllLines)
 	requireSemanticToken(t, tokens, SourceSemanticSymbol, 0, 0, len(name+":"))
 	requireSemanticToken(t, tokens, SourceSemanticReference, 1, len("b "), len("b ")+len(name))
+}
+
+func TestSourceSemanticTokensForToolsLineRange(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions(`#pragma version 8
+label:
+b label
+txn Sender // comment`, SourceToolOptions{Mode: ModeApp})
+
+	// A range covers only the lines it spans, and every kind the whole-document
+	// walk collects is filtered the same way.
+	tokens := SourceSemanticTokensForTools(result, SourceLineRange{Start: 1, End: 3})
+	requireSemanticToken(t, tokens, SourceSemanticSymbol, 1, 0, len("label:"))
+	requireSemanticToken(t, tokens, SourceSemanticReference, 2, len("b "), len("b label"))
+	for _, token := range tokens {
+		require.GreaterOrEqual(t, token.Range.Line, 1)
+		require.Less(t, token.Range.Line, 3)
+	}
+
+	require.Empty(t, SourceSemanticTokensForTools(result, SourceLineRange{}))
+	require.Equal(t, SourceSemanticTokensForTools(result, SourceAllLines),
+		SourceSemanticTokensForTools(result, SourceLineRange{Start: 0, End: len(result.Lines)}))
 }
 
 func requireSemanticToken(t *testing.T, tokens []SourceSemanticToken, kind SourceSemanticTokenKind, line int, column int, endColumn int) {

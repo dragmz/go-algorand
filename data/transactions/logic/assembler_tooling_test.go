@@ -144,7 +144,7 @@ func TestSourceToolArgAtForTools(t *testing.T) {
 func TestSourceInlayHintsForTools(t *testing.T) {
 	result := AnalyzeSourceForToolsWithOptions("txn 0\nbyte 0x3031", SourceToolOptions{Mode: ModeApp})
 
-	hints := SourceInlayHintsForTools(result.Lines, result.Program)
+	hints := SourceInlayHintsForTools(result.Lines, result.Program, SourceAllLines)
 	var named, decoded bool
 	for _, hint := range hints {
 		switch hint.Kind {
@@ -157,6 +157,24 @@ func TestSourceInlayHintsForTools(t *testing.T) {
 	}
 	require.True(t, named)
 	require.True(t, decoded)
+}
+
+func TestSourceInlayHintsForToolsLineRange(t *testing.T) {
+	result := AnalyzeSourceForToolsWithOptions("txn 0\nbyte 0x3031", SourceToolOptions{Mode: ModeApp})
+
+	// Both the operation walk and the leftover-token walk honour the range, so a
+	// hint outside it is never built.
+	first := SourceInlayHintsForTools(result.Lines, result.Program, SourceLineRange{Start: 0, End: 1})
+	require.Len(t, first, 1)
+	require.Equal(t, SourceInlayHintNamed, first[0].Kind)
+	require.Equal(t, "Sender", first[0].Label)
+
+	second := SourceInlayHintsForTools(result.Lines, result.Program, SourceLineRange{Start: 1, End: 2})
+	require.Len(t, second, 1)
+	require.Equal(t, SourceInlayHintDecoded, second[0].Kind)
+	require.Equal(t, "01", second[0].Label)
+
+	require.Empty(t, SourceInlayHintsForTools(result.Lines, result.Program, SourceLineRange{}))
 }
 
 // TestToolFieldGroupsCoverAllImmediates checks that every field immediate an

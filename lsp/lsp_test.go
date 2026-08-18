@@ -100,28 +100,17 @@ func TestSourceDiagnosticsToLSPReportsOnlyAssemblyDiagnostics(t *testing.T) {
 func TestSourceCodeLensesProgramSize(t *testing.T) {
 	result := logic.AnalyzeSourceForTools("int 1")
 
-	lens, ok := sourceCodeLensOfKind(sourceCodeLenses(result), sourceCodeLensProgramSize)
+	lens, ok := sourceCodeLensByKindForTest(sourceCodeLenses(result, tealConfig{ProgramSize: true}), sourceCodeLensProgramSize)
 	require.True(t, ok)
 	assert.Equal(t, len(result.OpStream.Program), lens.ProgramSize)
-	assert.True(t, sourceCodeLensEnabled(tealConfig{ProgramSize: true}, lens))
-	assert.False(t, sourceCodeLensEnabled(tealConfig{}, lens))
 
 	cl := sourceCodeLensToLSP(result.Lines, lens)
 	assert.Equal(t, fmt.Sprintf("size: %d bytes", len(result.OpStream.Program)), cl.Command.Title)
 	assert.Equal(t, LspRange{}, cl.Range)
 
 	// A program that does not assemble has no size to report.
-	_, ok = sourceCodeLensOfKind(sourceCodeLenses(logic.AnalyzeSourceForTools("unknown")), sourceCodeLensProgramSize)
+	_, ok = sourceCodeLensByKindForTest(sourceCodeLenses(logic.AnalyzeSourceForTools("unknown"), tealConfig{ProgramSize: true}), sourceCodeLensProgramSize)
 	assert.False(t, ok)
-}
-
-func sourceCodeLensOfKind(lenses []sourceCodeLens, kind sourceCodeLensKind) (sourceCodeLens, bool) {
-	for _, lens := range lenses {
-		if lens.Kind == kind {
-			return lens, true
-		}
-	}
-	return sourceCodeLens{}, false
 }
 
 func TestSourceDocumentSymbolToLSP(t *testing.T) {
@@ -171,38 +160,53 @@ func TestSourceInlayToLSP(t *testing.T) {
 	assert.True(t, *hint.PaddingLeft)
 }
 
-func TestSourceInlayRangeFiltering(t *testing.T) {
-	lines := logic.SourceLinesForTools("int 1\nint 2")
-	inlay := sourceInlay{
-		Kind: sourceInlayNamedValue,
-		Range: logic.SourceRange{
-			Line:      1,
-			Column:    len("int "),
-			EndLine:   1,
-			EndColumn: len("int 2"),
-		},
-	}
+func TestSourceCodeLensesBuildOnlyEnabledKinds(t *testing.T) {
+	result := logic.AnalyzeSourceForTools("#pragma version 8\nstart:\nb start")
 
-	assert.False(t, sourceInlayInRange(lines, inlay, LspRange{
-		Start: LspPosition{Line: 0, Character: 0},
-		End:   LspPosition{Line: 0, Character: len("int 1")},
-	}))
-	assert.True(t, sourceInlayInRange(lines, inlay, LspRange{
-		Start: LspPosition{Line: 1, Character: 0},
-		End:   LspPosition{Line: 1, Character: len("int 2")},
-	}))
+	assert.Empty(t, sourceCodeLenses(result, tealConfig{}))
+
+	refs := sourceCodeLenses(result, tealConfig{LensRefs: true})
+	require.Len(t, refs, 1)
+	assert.Equal(t, sourceCodeLensReferenceCount, refs[0].Kind)
+
+	pcs := sourceCodeLenses(result, tealConfig{PcLens: true})
+	require.NotEmpty(t, pcs)
+	for _, lens := range pcs {
+		assert.Equal(t, sourceCodeLensProgramCounter, lens.Kind)
+	}
 }
 
-func TestSourceAnnotationConfigFiltering(t *testing.T) {
-	config := tealConfig{
-		LensRefs:     true,
-		InlayDecoded: true,
-	}
+func TestSourceInlaysBuildOnlyEnabledKindsInRange(t *testing.T) {
+	result := logic.AnalyzeSourceForTools("txn 0\nbyte 0x3031")
 
-	assert.True(t, sourceCodeLensEnabled(config, sourceCodeLens{Kind: sourceCodeLensReferenceCount}))
-	assert.False(t, sourceCodeLensEnabled(config, sourceCodeLens{Kind: sourceCodeLensProgramCounter}))
-	assert.True(t, sourceInlayEnabled(config, sourceInlay{Kind: sourceInlayDecodedValue}))
-	assert.False(t, sourceInlayEnabled(config, sourceInlay{Kind: sourceInlayNamedValue}))
+	assert.Empty(t, sourceInlays(result, tealConfig{}, logic.SourceAllLines))
+
+	named := sourceInlays(result, tealConfig{InlayNamed: true}, logic.SourceAllLines)
+	require.Len(t, named, 1)
+	assert.Equal(t, sourceInlayNamedValue, named[0].Kind)
+
+	decoded := sourceInlays(result, tealConfig{InlayDecoded: true}, logic.SourceAllLines)
+	require.Len(t, decoded, 1)
+	assert.Equal(t, sourceInlayDecodedValue, decoded[0].Kind)
+
+	// The range narrows what is built, not what is kept.
+	both := tealConfig{InlayNamed: true, InlayDecoded: true}
+	assert.Len(t, sourceInlays(result, both, logic.SourceAllLines), 2)
+	assert.Len(t, sourceInlays(result, both, logic.SourceLineRange{Start: 1, End: 2}), 1)
+	assert.Empty(t, sourceInlays(result, both, logic.SourceLineRange{}))
+}
+
+func TestSourceLineRangeFromLSP(t *testing.T) {
+	rg := sourceLineRangeFromLSP(LspRange{
+		Start: LspPosition{Line: 3, Character: 7},
+		End:   LspPosition{Line: 5, Character: 0},
+	})
+
+	assert.False(t, rg.Contains(2))
+	assert.True(t, rg.Contains(3))
+	// The end line counts, even though the range stops at its first character.
+	assert.True(t, rg.Contains(5))
+	assert.False(t, rg.Contains(6))
 }
 
 func TestSourceNavigationHelpers(t *testing.T) {
@@ -259,9 +263,21 @@ func TestSourceDocumentSymbolsSkipEmptyNames(t *testing.T) {
 	}}, sourceDocumentSymbols(result))
 }
 
+// allAnnotationsForTest enables every lens and inlay kind, for tests about what
+// gets built rather than about the configuration gate.
+var allAnnotationsForTest = tealConfig{
+	SemanticTokens: true,
+	InlayNamed:     true,
+	InlayDecoded:   true,
+	LensRefs:       true,
+	PcLens:         true,
+	PcInlay:        true,
+	ProgramSize:    true,
+}
+
 func TestSourceCodeLenses(t *testing.T) {
 	result := logic.AnalyzeSourceForToolsWithOptions("b a\na:\nunused:", logic.SourceToolOptions{Mode: logic.ModeApp})
-	lenses := sourceCodeLenses(result)
+	lenses := sourceCodeLenses(result, allAnnotationsForTest)
 
 	refLens, ok := sourceCodeLensByKindForTest(lenses, sourceCodeLensReferenceCount)
 	assert.True(t, ok)
@@ -272,14 +288,14 @@ func TestSourceCodeLenses(t *testing.T) {
 		assert.False(t, lens.Kind == sourceCodeLensReferenceCount && lens.Range.Line == 2)
 	}
 
-	pcLenses := sourceCodeLensesByKindForTest(sourceCodeLenses(logic.AnalyzeSourceForTools("int 1\nint 2")), sourceCodeLensProgramCounter)
+	pcLenses := sourceCodeLensesByKindForTest(sourceCodeLenses(logic.AnalyzeSourceForTools("int 1\nint 2"), allAnnotationsForTest), sourceCodeLensProgramCounter)
 	assert.NotEmpty(t, pcLenses)
 	assertProgramCountersSorted(t, sourceCodeLensPCsForTest(pcLenses))
 }
 
 func TestSourceInlays(t *testing.T) {
 	result := logic.AnalyzeSourceForToolsWithOptions("txn 0\nbyte 0x3031\nint 1", logic.SourceToolOptions{Mode: logic.ModeApp})
-	inlays := sourceInlays(result)
+	inlays := sourceInlays(result, allAnnotationsForTest, logic.SourceAllLines)
 
 	named, ok := sourceInlayByKindForTest(inlays, sourceInlayNamedValue)
 	assert.True(t, ok)
@@ -300,17 +316,35 @@ func TestSourceCompletionsAtToLSPAddsSnippetsOnlyForOpcodes(t *testing.T) {
 	result := logic.AnalyzeSourceForTools("tx")
 
 	opCompletions := sourceCompletionsAtToLSP(result, 0, len("tx"))
-	opLabels := completionLabelsForTest(opCompletions)
+	opLabels := completionLabelsForTest(opCompletions.Items)
 	assert.Contains(t, opLabels, "soc")
 	assert.Contains(t, opLabels, "func")
 	assert.Contains(t, opLabels, "txn")
 
 	result = logic.AnalyzeSourceForTools("txn ")
 	argCompletions := sourceCompletionsAtToLSP(result, 0, len("txn "))
-	argLabels := completionLabelsForTest(argCompletions)
+	argLabels := completionLabelsForTest(argCompletions.Items)
 	assert.NotContains(t, argLabels, "soc")
 	assert.NotContains(t, argLabels, "func")
 	assert.Contains(t, argLabels, "Sender")
+}
+
+func TestSourceCompletionsAtToLSPHoldsBackDocumentation(t *testing.T) {
+	result := logic.AnalyzeSourceForTools("tx")
+
+	completions := sourceCompletionsAtToLSP(result, 0, len("tx"))
+	for _, item := range completions.Items {
+		assert.Nil(t, item.Documentation, "item %q carries documentation", item.Label)
+	}
+
+	// The documentation is kept aside under the label that resolve will ask for.
+	assert.NotEmpty(t, completions.Docs["txn"])
+
+	// Snippets have no documentation to hold back.
+	assert.NotContains(t, completions.Docs, "soc")
+
+	args := sourceCompletionsAtToLSP(logic.AnalyzeSourceForTools("txn "), 0, len("txn "))
+	assert.NotEmpty(t, args.Docs["Sender"])
 }
 
 func completionLabelsForTest(items []lspCompletionItem) map[string]bool {

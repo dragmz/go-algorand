@@ -39,39 +39,34 @@ type SourceSemanticToken struct {
 }
 
 // SourceSemanticTokensForTools returns semantic tokens derived from assembler
-// source analysis.
-func SourceSemanticTokensForTools(result SourceAnalysisResult) []SourceSemanticToken {
+// source analysis for the lines in rg. Pass SourceAllLines for a whole document.
+func SourceSemanticTokensForTools(result SourceAnalysisResult, rg SourceLineRange) []SourceSemanticToken {
 	var tokens []SourceSemanticToken
 
+	appendToken := func(kind SourceSemanticTokenKind, tokenRange SourceRange) {
+		if !rg.Contains(tokenRange.Line) {
+			return
+		}
+		tokens = append(tokens, SourceSemanticToken{Kind: kind, Range: tokenRange})
+	}
+
 	for _, class := range result.Program.TokenClasses {
-		tokens = append(tokens, SourceSemanticToken{
-			Kind:  sourceSemanticKindFromTokenClass(class.Kind),
-			Range: sourceRangeFromToken(class.Token),
-		})
+		appendToken(sourceSemanticKindFromTokenClass(class.Kind), sourceRangeFromToken(class.Token))
 	}
 
 	for _, line := range result.Lines {
 		if line.Comment == nil {
 			continue
 		}
-		tokens = append(tokens, SourceSemanticToken{
-			Kind:  SourceSemanticComment,
-			Range: sourceRangeFromToken(*line.Comment),
-		})
+		appendToken(SourceSemanticComment, sourceRangeFromToken(*line.Comment))
 	}
 
 	for _, symbol := range result.Index.Symbols {
-		tokens = append(tokens, SourceSemanticToken{
-			Kind:  SourceSemanticSymbol,
-			Range: SourceSymbolRangeForTools(symbol),
-		})
+		appendToken(SourceSemanticSymbol, SourceSymbolRangeForTools(symbol))
 	}
 
 	for _, ref := range result.Index.References {
-		tokens = append(tokens, SourceSemanticToken{
-			Kind:  SourceSemanticReference,
-			Range: SourceReferenceRangeForTools(ref),
-		})
+		appendToken(SourceSemanticReference, SourceReferenceRangeForTools(ref))
 	}
 
 	return tokens

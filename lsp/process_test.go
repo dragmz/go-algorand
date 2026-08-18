@@ -164,7 +164,7 @@ func TestInlayHints(t *testing.T) {
 		name := fmt.Sprintf("test #%d", i)
 
 		res := Process(ts)
-		ihs := logic.SourceInlayHintsForTools(res.Lines, res.Program)
+		ihs := logic.SourceInlayHintsForTools(res.Lines, res.Program, logic.SourceAllLines)
 
 		var decoded []logic.SourceInlayHint
 		for _, hint := range ihs {
