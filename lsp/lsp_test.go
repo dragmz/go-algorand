@@ -104,13 +104,57 @@ func TestSourceCodeLensesProgramSize(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, len(result.OpStream.Program), lens.ProgramSize)
 
-	cl := sourceCodeLensToLSP(result.Lines, lens)
+	cl := sourceCodeLensToLSP(result.Lines, protocolTestURI, lens)
+	require.NotNil(t, cl.Command)
 	assert.Equal(t, fmt.Sprintf("size: %d bytes", len(result.OpStream.Program)), cl.Command.Title)
 	assert.Equal(t, LspRange{}, cl.Range)
+	// A label needs no resolving, so it carries its command straight away.
+	assert.Nil(t, cl.Data)
 
 	// A program that does not assemble has no size to report.
 	_, ok = sourceCodeLensByKindForTest(sourceCodeLenses(logic.AnalyzeSourceForTools("unknown"), tealConfig{ProgramSize: true}), sourceCodeLensProgramSize)
 	assert.False(t, ok)
+}
+
+func TestSourceCodeLensReferenceCountResolves(t *testing.T) {
+	const source = "#pragma version 8\nstart:\n  b start\n  b start"
+	result := logic.AnalyzeSourceForTools(source)
+
+	lens, ok := sourceCodeLensByKindForTest(sourceCodeLenses(result, tealConfig{LensRefs: true}), sourceCodeLensReferenceCount)
+	require.True(t, ok)
+
+	// On the wire the lens is bare: no command, and no locations to carry, only
+	// where to look them up.
+	cl := sourceCodeLensToLSP(result.Lines, protocolTestURI, lens)
+	assert.Nil(t, cl.Command)
+	require.Equal(t, &lspCodeLensData{Uri: protocolTestURI, Line: 1, Column: 0}, cl.Data)
+
+	resolved := sourceCodeLensResolveToLSP(result, lspCodeLensResolveParams{
+		Range: cl.Range,
+		Data:  cl.Data.(*lspCodeLensData),
+	})
+
+	assert.Equal(t, cl.Range, resolved.Range)
+	require.NotNil(t, resolved.Command)
+	assert.Equal(t, "refs: 2", resolved.Command.Title)
+	assert.Equal(t, tealShowReferencesCommand, resolved.Command.Command)
+
+	// The client gets what the built-in peek needs: where it was invoked, and
+	// every place the name is used.
+	require.Len(t, resolved.Command.Arguments, 3)
+	assert.Equal(t, protocolTestURI, resolved.Command.Arguments[0])
+	assert.Equal(t, LspPosition{Line: 1, Character: 0}, resolved.Command.Arguments[1])
+	locations, ok := resolved.Command.Arguments[2].([]lspLocation)
+	require.True(t, ok)
+	require.Len(t, locations, 2)
+	assert.Equal(t, LspRange{
+		Start: LspPosition{Line: 2, Character: len("  b ")},
+		End:   LspPosition{Line: 2, Character: len("  b start")},
+	}, locations[0].Range)
+
+	// The count the lens shows comes from the same walk as the locations, so it
+	// matches what the peek lists.
+	assert.Equal(t, fmt.Sprintf("refs: %d", len(locations)), resolved.Command.Title)
 }
 
 func TestSourceDocumentSymbolToLSP(t *testing.T) {

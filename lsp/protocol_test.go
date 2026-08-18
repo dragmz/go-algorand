@@ -182,6 +182,13 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 		protocolRequest("lenses", "textDocument/codeLens", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 		}),
+		protocolRequest("lens-resolve", "codeLens/resolve", map[string]any{
+			"range": protocolRange(2, 0, 2, 0),
+			"data":  map[string]any{"uri": protocolTestURI, "line": 2, "column": 0},
+		}),
+		protocolRequest("lens-resolve-bare", "codeLens/resolve", map[string]any{
+			"range": protocolRange(0, 0, 0, 0),
+		}),
 		protocolRequest("inlays", "textDocument/inlayHint", map[string]any{
 			"textDocument": map[string]any{"uri": protocolTestURI},
 			"range":        protocolRange(0, 0, 99, 0),
@@ -331,9 +338,31 @@ func TestProtocolTextDocumentOperations(t *testing.T) {
 
 	lenses := protocolResultAs[[]LspCodeLens](t, protocolResponseByID(t, frames, "lenses"))
 	require.NotEmpty(t, lenses)
-	assert.True(t, protocolCodeLensTitleContains(lenses, "refs:"))
 	assert.True(t, protocolCodeLensTitleContains(lenses, "pc:"))
 	assert.True(t, protocolCodeLensTitleContains(lenses, "size:"))
+
+	// A reference lens leaves without a command, so the client resolves it and
+	// no locations ride along with the ones it never shows.
+	assert.False(t, protocolCodeLensTitleContains(lenses, "refs:"))
+	unresolved := 0
+	for _, lens := range lenses {
+		if lens.Command == nil {
+			assert.NotNil(t, lens.Data)
+			unresolved++
+		}
+	}
+	assert.NotZero(t, unresolved)
+
+	resolvedLens := protocolResultAs[LspCodeLens](t, protocolResponseByID(t, frames, "lens-resolve"))
+	require.NotNil(t, resolvedLens.Command)
+	assert.Equal(t, "refs: 1", resolvedLens.Command.Title)
+	assert.Equal(t, tealShowReferencesCommand, resolvedLens.Command.Command)
+	require.Len(t, resolvedLens.Command.Arguments, 3)
+	assert.Equal(t, protocolTestURI, resolvedLens.Command.Arguments[0])
+
+	// A lens that never asked to be resolved comes back as it went.
+	bareLens := protocolResultAs[LspCodeLens](t, protocolResponseByID(t, frames, "lens-resolve-bare"))
+	assert.Nil(t, bareLens.Command)
 
 	inlays := protocolResultAs[[]LspInlayHint](t, protocolResponseByID(t, frames, "inlays"))
 	require.NotEmpty(t, inlays)
@@ -387,7 +416,9 @@ func TestProtocolCapabilitiesAdvertiseTestedOperations(t *testing.T) {
 	assert.NotNil(t, init.Capabilities.SignatureHelpProvider)
 	assert.NotNil(t, init.Capabilities.InlayHintProvider)
 	assert.True(t, *init.Capabilities.InlayHintProvider)
-	assert.NotNil(t, init.Capabilities.CodeLensProvider)
+	require.NotNil(t, init.Capabilities.CodeLensProvider)
+	require.NotNil(t, init.Capabilities.CodeLensProvider.ResolveProvider)
+	assert.True(t, *init.Capabilities.CodeLensProvider.ResolveProvider)
 
 	require.NotNil(t, init.Capabilities.ExecuteCommandProvider)
 	advertised := protocolCommandSet(init.Capabilities.ExecuteCommandProvider.Commands)

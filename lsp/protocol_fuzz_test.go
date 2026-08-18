@@ -145,7 +145,10 @@ func FuzzSourceFeatureConversions(f *testing.F) {
 			_ = sourceSemanticTokenToLSP(result.Lines, token)
 		}
 		for _, lens := range sourceCodeLenses(*result, allAnnotationsForTest) {
-			_ = sourceCodeLensToLSP(result.Lines, lens)
+			cl := sourceCodeLensToLSP(result.Lines, "file:///fuzz.teal", lens)
+			if data, ok := cl.Data.(*lspCodeLensData); ok {
+				_ = sourceCodeLensResolveToLSP(*result, lspCodeLensResolveParams{Range: cl.Range, Data: data})
+			}
 		}
 
 		// The range-scoped paths have to survive whatever position the fuzzer

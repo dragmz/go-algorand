@@ -841,6 +841,25 @@ type LspCodeLens struct {
 	Data    any         `json:"data,omitempty"`
 }
 
+// tealShowReferencesCommand is answered by the client rather than by VS Code
+// itself. The built-in editor.action.showReferences takes editor types, and a
+// command carried by a code lens reaches the client as plain JSON, so the
+// extension converts the arguments and forwards them.
+const tealShowReferencesCommand = "teal.showReferences"
+
+// lspCodeLensData travels with a lens the client has to resolve, naming the
+// symbol the lens belongs to.
+type lspCodeLensData struct {
+	Uri    string `json:"uri"`
+	Line   int    `json:"line"`
+	Column int    `json:"column"`
+}
+
+type lspCodeLensResolveParams struct {
+	Range LspRange         `json:"range"`
+	Data  *lspCodeLensData `json:"data,omitempty"`
+}
+
 // notifications
 type lspDidChange lspRequest[*lspDidChangeParams]
 type lspDidOpen lspRequest[*lspDidOpenParams]
@@ -868,6 +887,7 @@ type lspSignatureHelpRequest lspRequest[*lspSignatureHelpRequestParams]
 type lspInlayHintRequest lspRequest[*lspInlayHintRequestParams]
 type lspInitializeRequest lspRequest[*lspInitializeRequestParams]
 type lspCodeLensRequest lspRequest[*lspCodeLensRequestParams]
+type lspCodeLensResolveRequest lspRequest[*lspCodeLensResolveParams]
 
 func readInto(b []byte, v interface{}) error {
 	err := json.Unmarshal(b, v)
@@ -1236,11 +1256,29 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 
 		if res, ok := l.source(req.Params.TextDocument.Uri); ok {
 			for _, lens := range sourceCodeLenses(*res, l.config) {
-				cls = append(cls, sourceCodeLensToLSP(res.Lines, lens))
+				cls = append(cls, sourceCodeLensToLSP(res.Lines, req.Params.TextDocument.Uri, lens))
 			}
 		}
 
 		return l.success(h.Id, cls)
+
+	case "codeLens/resolve":
+		req, err := read[lspCodeLensResolveRequest](b)
+		if err != nil {
+			return l.failf(h.Id, ErrorCodeParseError, "failed to read request body: %v", err)
+		}
+
+		// A lens whose document is gone, or that never asked to be resolved,
+		// goes back as it came and the client drops it.
+		if req.Params.Data == nil {
+			return l.success(h.Id, LspCodeLens{Range: req.Params.Range})
+		}
+		res, ok := l.source(req.Params.Data.Uri)
+		if !ok {
+			return l.success(h.Id, LspCodeLens{Range: req.Params.Range, Data: req.Params.Data})
+		}
+
+		return l.success(h.Id, sourceCodeLensResolveToLSP(*res, *req.Params))
 
 	case "textDocument/inlayHint":
 		req, err := read[lspInlayHintRequest](b)
@@ -1561,7 +1599,9 @@ func (l *lsp) handleRequest(h jsonRpcHeader, b []byte) error {
 				HoverProvider:         capabilitySupported,
 				SignatureHelpProvider: &lspSignatureHelpOptions{},
 				InlayHintProvider:     inlayHint,
-				CodeLensProvider:      &lspCodeLensProvider{},
+				CodeLensProvider: &lspCodeLensProvider{
+					ResolveProvider: capabilitySupported,
+				},
 			},
 		})
 	default:
@@ -1585,6 +1625,11 @@ type sourceCodeLens struct {
 	ReferenceCount int
 	ProgramCounter int
 	ProgramSize    int
+
+	// Symbol is where the name a reference count lens belongs to starts. The
+	// lens itself sits at the beginning of the line, which is not enough to find
+	// the symbol again when two of them share a line.
+	Symbol logic.SourcePosition
 }
 
 type sourceInlayKind int
@@ -1722,6 +1767,10 @@ func sourceCodeLenses(result logic.SourceAnalysisResult, config tealConfig) []so
 					EndLine: symbol.Line,
 				},
 				ReferenceCount: count,
+				Symbol: logic.SourcePosition{
+					Line:   symbol.Line,
+					Column: symbol.Column,
+				},
 			})
 		}
 	}
@@ -1837,23 +1886,52 @@ func sourceActionToLSP(uri string, lines []logic.SourceLine, action logic.Source
 	}
 }
 
-func sourceCodeLensToLSP(lines []logic.SourceLine, lens sourceCodeLens) LspCodeLens {
-	title := ""
+// sourceCodeLensToLSP converts a lens for the wire. A lens that only labels
+// something carries its command straight away, because its title costs nothing
+// to compute. A reference count lens is left without a command so that the
+// client resolves it, which keeps every location it points at out of a response
+// the editor mostly discards; it carries instead what codeLens/resolve needs to
+// find the symbol again.
+func sourceCodeLensToLSP(lines []logic.SourceLine, uri string, lens sourceCodeLens) LspCodeLens {
+	cl := LspCodeLens{Range: sourceRangeToLSP(lines, lens.Range)}
+
 	switch lens.Kind {
 	case sourceCodeLensReferenceCount:
-		title = fmt.Sprintf("refs: %d", lens.ReferenceCount)
+		cl.Data = &lspCodeLensData{
+			Uri:    uri,
+			Line:   lens.Symbol.Line,
+			Column: lens.Symbol.Column,
+		}
 	case sourceCodeLensProgramCounter:
-		title = fmt.Sprintf("pc: %d", lens.ProgramCounter)
+		cl.Command = &LspCommand{Title: fmt.Sprintf("pc: %d", lens.ProgramCounter)}
 	case sourceCodeLensProgramSize:
-		title = fmt.Sprintf("size: %d bytes", lens.ProgramSize)
+		cl.Command = &LspCommand{Title: fmt.Sprintf("size: %d bytes", lens.ProgramSize)}
 	default:
+		cl.Command = &LspCommand{}
 	}
-	return LspCodeLens{
-		Range: sourceRangeToLSP(lines, lens.Range),
-		Command: &LspCommand{
-			Title: title,
+
+	return cl
+}
+
+// sourceCodeLensResolveToLSP fills in what a reference count lens does when
+// clicked. The count comes from the same walk as the locations it opens, so the
+// number the lens shows and what the peek lists cannot disagree.
+func sourceCodeLensResolveToLSP(result logic.SourceAnalysisResult, lens lspCodeLensResolveParams) LspCodeLens {
+	resolved := LspCodeLens{Range: lens.Range, Data: lens.Data}
+
+	locations := sourceLocationsToLSP(lens.Data.Uri, result.Lines,
+		sourceOccurrences(result, lens.Data.Line, lens.Data.Column, false))
+
+	resolved.Command = &LspCommand{
+		Title:   fmt.Sprintf("refs: %d", len(locations)),
+		Command: tealShowReferencesCommand,
+		Arguments: []interface{}{
+			lens.Data.Uri,
+			sourcePositionToLSP(result.Lines, logic.SourcePosition{Line: lens.Data.Line, Column: lens.Data.Column}),
+			locations,
 		},
 	}
+	return resolved
 }
 
 // sourceLineRangeFromLSP narrows an LSP range to the lines it touches. The end
